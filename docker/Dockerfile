@@ -215,15 +215,16 @@ COPY --from=nemo-gym --chown=${RUNTIME_UID}:${RUNTIME_GID} \
 RUN chown root:root /opt/nemo-gym && \
     UV_LINK_MODE=symlink uv sync --locked --extra vllm --extra telemetry --extra dev
 
-# Seed the runtime uv cache with the full dependency set (including the dev
-# extra and the project itself) so that CI scripts can run offline: setup_dev.sh
-# resolves `uv sync --extra dev --offline` from this cache in a fresh venv.
+# Seed the runtime uv cache with the release and core-test dependency sets.
+# setup_dev.sh installs dev offline; core_unit_tests.sh additionally requests
+# telemetry, mlflow and wandb. Cache their complete locked dependency closures
+# without enabling the optional SDKs in the shipped project environment.
 # The runtime cache is separate from the root-owned build cache (/opt/uv/cache)
 # that backs the symlinked project environment.
 ENV UV_CACHE_DIR=/opt/nemo-gym/cache/uv
 RUN uv venv /opt/nemo-gym/cache/seed-venv && \
     UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/cache/seed-venv \
-        uv sync --locked --extra vllm --extra telemetry --extra dev && \
+        uv sync --locked --extra vllm --extra telemetry --extra dev --extra mlflow --extra wandb && \
     rm -rf /opt/nemo-gym/cache/seed-venv && \
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
 
@@ -331,8 +332,10 @@ RUN export HOME=/home/nemo-runtime \
         "${venv_site_packages}/.nonroot-write-probe" && \
     gym --help >/dev/null && \
     uv venv /opt/nemo-gym/cache/container-smoke && \
+    UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/cache/container-smoke \
+        uv sync --locked --offline --extra dev --extra telemetry --extra mlflow --extra wandb && \
     /opt/nemo-gym/cache/container-smoke/bin/python -c \
-        "import sys; assert sys.version_info[:2] == (3, 13)" && \
+        "import mlflow, pytest, sys, wandb, zipp; assert sys.version_info[:2] == (3, 13)" && \
     rm -r /opt/nemo-gym/cache/container-smoke \
         "${HOME}/.nonroot-write-probe" \
         "${XDG_CACHE_HOME}/.nonroot-write-probe" \
