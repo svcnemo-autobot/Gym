@@ -223,7 +223,8 @@ RUN chown root:root /opt/nemo-gym && \
 ENV UV_CACHE_DIR=/opt/nemo-gym/cache/uv
 RUN uv venv /opt/nemo-gym/cache/seed-venv && \
     UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/cache/seed-venv \
-        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray && \
+        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray \
+            --extra mlflow --extra wandb && \
     rm -rf /opt/nemo-gym/cache/seed-venv && \
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
 
