@@ -17,8 +17,8 @@ import argparse
 import json
 import os
 import re
+import select
 import subprocess
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -206,27 +206,78 @@ def test_resubmit_refuses_an_unknown_executor(tmp_path: Path) -> None:
         resubmit(*_handle(_staged_run(tmp_path, executor="local")))
 
 
-def test_two_concurrent_resubmits_queue_one_job(tmp_path: Path, slurm_bin: Path) -> None:
+@pytest.mark.parametrize("subshell_cleanup", [False, True])
+def test_two_concurrent_resubmits_queue_one_job(
+    tmp_path: Path, slurm_bin: Path, monkeypatch: pytest.MonkeyPatch, subshell_cleanup: bool
+) -> None:
     job_dir = _staged_run(tmp_path)
-    # squeue lists what sbatch queued; sbatch is slow, so both resubmits pass an unlocked squeue check first.
-    (slurm_bin / "squeue").write_text('#!/bin/bash\ncat "$(dirname "$0")/queued" 2>/dev/null; exit 0\n')
-    (slurm_bin / "sbatch").write_text('#!/bin/bash\nsleep 1\necho "$PWD" >> "$(dirname "$0")/queued"\necho 4242\n')
-    barrier = threading.Barrier(2)
+    if subshell_cleanup:
+        run = LocalConnection.run
 
-    def attempt() -> str:
-        barrier.wait()
-        try:
-            return resubmit(*_handle(job_dir)).job_id
-        except RuntimeError as error:
-            return str(error)
+        def run_with_subshell_cleanup(self: LocalConnection, commands: list[str]) -> str:
+            # Explicitly install the parent's EXIT handler in the scheduler subshell.
+            # This exercises lock ownership independently of Bash's trap inheritance.
+            commands = [command.replace("$(squeue ", '$(eval "$(trap -p EXIT)"; squeue ') for command in commands]
+            return run(self, commands)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(lambda _: attempt(), range(2)))
+        monkeypatch.setattr(LocalConnection, "run", run_with_subshell_cleanup)
+    # Hold sbatch before it publishes the job. The second caller must refuse the lock,
+    # not rely on a sleep being long enough for its thread to reach the critical section.
+    (slurm_bin / "queued").touch()
+    (slurm_bin / "squeue").write_text('#!/bin/bash\ncat "$(dirname "$0")/queued"\n')
+    (slurm_bin / "sbatch").write_text(
+        "#!/bin/bash\nset -eu\n"
+        'echo entered > "$(dirname "$0")/entered"\n'
+        'read -r -t 20 release < "$(dirname "$0")/release"\n'
+        'echo "$PWD" >> "$(dirname "$0")/queued"\necho 4242\n'
+    )
+    entered = slurm_bin / "entered"
+    release = slurm_bin / "release"
+    os.mkfifo(entered)
+    os.mkfifo(release)
+    # Open read/write so opening a FIFO never hangs if the worker fails before sbatch.
+    entered_fd = os.open(entered, os.O_RDWR | os.O_NONBLOCK)
+    release_fd = os.open(release, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(resubmit, *_handle(job_dir))
+            try:
+                assert select.select([entered_fd], [], [], 10)[0], "sbatch did not reach the synchronization point"
+                assert os.read(entered_fd, 1024) == b"entered\n"
+                assert (job_dir / ".gym_resubmit.lock").is_dir()
+                with pytest.raises(RuntimeError, match="another resubmit holds"):
+                    resubmit(*_handle(job_dir))
+                assert (slurm_bin / "queued").read_text() == ""
+                assert (job_dir / ".gym_resubmit.lock").is_dir()
+            finally:
+                os.write(release_fd, b"release\n")
+            assert first.result(timeout=10).job_id == "4242"
+    finally:
+        os.close(entered_fd)
+        os.close(release_fd)
 
-    assert sorted(outcome == "4242" for outcome in outcomes) == [False, True]
-    assert re.search("another resubmit holds|still pending or running", next(o for o in outcomes if o != "4242"))
     assert (slurm_bin / "queued").read_text() == f"{job_dir}\n"
     assert not (job_dir / ".gym_resubmit.lock").exists()
+    # Once the lock is released, the scheduler guard still prevents a second job.
+    with pytest.raises(RuntimeError, match="still pending or running"):
+        resubmit(*_handle(job_dir))
+
+
+@pytest.mark.parametrize("command", ["squeue", "sbatch"])
+def test_resubmit_releases_its_lock_after_a_scheduler_failure(tmp_path: Path, slurm_bin: Path, command: str) -> None:
+    job_dir = _staged_run(tmp_path)
+    stub = slurm_bin / command
+    script = stub.read_text()
+    stub.write_text("#!/bin/bash\necho unavailable >&2\nexit 1\n")
+
+    with pytest.raises(RuntimeError, match="squeue failed" if command == "squeue" else "unavailable"):
+        resubmit(*_handle(job_dir))
+
+    assert not (job_dir / ".gym_resubmit.lock").exists()
+    assert not (slurm_bin / "cwd").exists()
+    assert _record(job_dir).benchmark_job("gsm8k").job_id == "100"
+    stub.write_text(script)
+    assert resubmit(*_handle(job_dir)).job_id == "4242"
 
 
 # --- The resubmit only queues; the job resets its own run state ---------------------------------------------

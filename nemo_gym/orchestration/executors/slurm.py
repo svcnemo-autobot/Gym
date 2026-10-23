@@ -263,7 +263,10 @@ class SlurmExecutor(BaseExecutor):
                         # mkdir, not flock: it is atomic on shared filesystems that do not support flock.
                         f'mkdir {_RESUBMIT_LOCK} 2>/dev/null || fail "another resubmit holds $PWD/{_RESUBMIT_LOCK}; '
                         'remove it if no resubmit is running"',
-                        f"trap 'rmdir {_RESUBMIT_LOCK}' EXIT",
+                        # Only the acquiring shell may release the lock, never a command substitution.
+                        # $$ is unchanged in subshells; BASHPID identifies the shell running the trap.
+                        "resubmit_lock_owner=$BASHPID",
+                        f'trap \'if [ "$BASHPID" = "$resubmit_lock_owner" ]; then rmdir {_RESUBMIT_LOCK}; fi\' EXIT',
                         "workdirs=$(squeue --me --noheader --format=%Z) || fail 'squeue failed'",
                         'for d in $workdirs; do [ "$d" != "$PWD" ] || '
                         'fail "A job of this run is still pending or running in $PWD."; done',
