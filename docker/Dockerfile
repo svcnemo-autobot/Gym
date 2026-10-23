@@ -56,7 +56,8 @@ apt-get install -y --no-install-recommends \
     buildah \
     bubblewrap \
     uidmap \
-    fuse-overlayfs
+    fuse-overlayfs \
+    libxrender1
 
 apt-get purge -y \
     ffmpeg \
@@ -378,6 +379,13 @@ for shard in 1 6; do
         +num_shards=8 "+shard_index=${shard}" \
         "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_venv_root}"
 done
+# Native miniswe tests create a separate CLI environment from this requirements
+# file. Seeding component setup alone does not populate that nested closure.
+uv venv --python "$(command -v python)" "${seed_venv_root}/miniswe-native"
+uv --no-config pip install --python "${seed_venv_root}/miniswe-native/bin/python" \
+    -r responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
+"${seed_venv_root}/miniswe-native/bin/python" -c \
+    "import importlib.metadata as m; assert m.version('mini-swe-agent') == '2.4.6'; assert m.version('litellm') == '1.106.0'; assert m.version('mcp') == '2.2.0'"
 # Retain pinned Kilo tools for diagnostic admission, without waiving runtime setup.
 UV_PROJECT_ENVIRONMENT="${seed_venv_root}/kilocode" uv sync --locked \
     --project responses_api_agents/kilocode_agent --no-dev
@@ -492,6 +500,19 @@ RUN export HOME=/home/nemo-runtime \
         /opt/nemo-gym/cache/.nonroot-write-probe \
         /opt/nemo-gym/results/.nonroot-write-probe \
         "${venv_site_packages}/.nonroot-write-probe"
+
+# Validate the nested fixture closure offline as the unchanged runtime UID.
+RUN <<"EOF" bash -exu -o pipefail
+export HOME=/home/nemo-runtime
+python -c "import ctypes; ctypes.CDLL('libXrender.so.1')"
+probe="$(mktemp -d /opt/nemo-gym/cache/native-fixture-probe-XXXXXX)"
+uv --offline --no-config venv "${probe}/venv" --python "$(command -v python)"
+uv --offline --no-config pip install --python "${probe}/venv/bin/python" \
+    -r /opt/nemo-gym/responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
+"${probe}/venv/bin/python" -c \
+    "import importlib.metadata as m; assert m.version('mini-swe-agent') == '2.4.6'; assert m.version('litellm') == '1.106.0'; assert m.version('mcp') == '2.2.0'"
+rm -rf "${probe}"
+EOF
 
 USER root
 ENTRYPOINT ["gym"]
