@@ -26,6 +26,12 @@ FROM scratch AS nemo-gym
 ARG GYM_GIT_REF=main
 ADD --keep-git-dir=true https://github.com/NVIDIA-NeMo/Gym.git#${GYM_GIT_REF} /
 
+# Validation-only source for the immutable component lock closure. The product
+# PR does not include this Dockerfile change. These dependency definitions are
+# unchanged in the current merged candidate. No Node/runtime download is added.
+FROM scratch AS shard-validation-source
+ADD --keep-git-dir=true https://github.com/svcnemo-autobot/Gym.git#539d18918a71ee7e35ea7b0f50d5b0d882980d5f /
+
 FROM ${BASE_IMAGE} AS base
 ENV NEMO_GYM_CONTAINER=1
 USER root
@@ -44,7 +50,13 @@ apt-get install -y --no-install-recommends \
     wget \
     less \
     vim \
-    gnupg
+    gnupg \
+    tmux \
+    busybox \
+    buildah \
+    bubblewrap \
+    uidmap \
+    fuse-overlayfs
 
 apt-get purge -y \
     ffmpeg \
@@ -223,7 +235,8 @@ RUN chown root:root /opt/nemo-gym && \
 ENV UV_CACHE_DIR=/opt/nemo-gym/cache/uv
 RUN uv venv /opt/nemo-gym/cache/seed-venv && \
     UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/cache/seed-venv \
-        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray && \
+        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray \
+            --extra mlflow --extra wandb && \
     rm -rf /opt/nemo-gym/cache/seed-venv && \
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
 
@@ -246,6 +259,24 @@ if [[ -n "${NEMO_GYM_SEED_SERVER_ENVS:-}" ]]; then
     rm -rf "${seed_venv_root}"
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
 fi
+EOF
+
+# Seed the complete native shard-6 setup closure from the immutable PR source,
+# including build isolation and inherited parent requirements. Keep every native
+# assertion and launcher unchanged. The build keeps only the dependency cache.
+COPY --from=shard-validation-source / /tmp/gym-shard6-validation/
+RUN <<"EOF" bash -exu -o pipefail
+seed_venv_root="$(mktemp -d)"
+cd /tmp/gym-shard6-validation
+PYTHONPATH=/tmp/gym-shard6-validation ng_test_all \
+    +setup_only=true +delete_venvs_after_each_test=true \
+    +num_shards=8 +shard_index=6 \
+    "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_venv_root}"
+rm -rf "${seed_venv_root}" /tmp/gym-shard6-validation
+chown -R "${RUNTIME_UID}:${RUNTIME_GID}" "${UV_CACHE_DIR}"
+command -v tmux
+command -v busybox
+command -v buildah
 EOF
 
 # Seed the pre-commit hook cache (PRE_COMMIT_HOME) so the image's offline lint
@@ -330,6 +361,9 @@ RUN export HOME=/home/nemo-runtime \
         /opt/nemo-gym/results/.nonroot-write-probe \
         "${venv_site_packages}/.nonroot-write-probe" && \
     gym --help >/dev/null && \
+    tmux -V && \
+    busybox true && \
+    buildah --version && \
     uv venv /opt/nemo-gym/cache/container-smoke && \
     /opt/nemo-gym/cache/container-smoke/bin/python -c \
         "import sys; assert sys.version_info[:2] == (3, 13)" && \
