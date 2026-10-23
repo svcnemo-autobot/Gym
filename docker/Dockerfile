@@ -26,6 +26,12 @@ FROM scratch AS nemo-gym
 ARG GYM_GIT_REF=main
 ADD --keep-git-dir=true https://github.com/NVIDIA-NeMo/Gym.git#${GYM_GIT_REF} /
 
+# Validation-only source for managed dependency metadata. The product PR does
+# not include this Dockerfile. Protected-base modules are copied below, and the
+# three affected locks are regenerated and checked against the candidate hashes.
+FROM scratch AS shard-validation-source
+ADD --keep-git-dir=true https://github.com/svcnemo-autobot/Gym.git#77770753b589f5f183f19e7332c31f6d9ff602de /
+
 FROM ${BASE_IMAGE} AS base
 ENV NEMO_GYM_CONTAINER=1
 USER root
@@ -44,7 +50,13 @@ apt-get install -y --no-install-recommends \
     wget \
     less \
     vim \
-    gnupg
+    gnupg \
+    tmux \
+    busybox \
+    buildah \
+    bubblewrap \
+    uidmap \
+    fuse-overlayfs
 
 apt-get purge -y \
     ffmpeg \
@@ -223,7 +235,8 @@ RUN chown root:root /opt/nemo-gym && \
 ENV UV_CACHE_DIR=/opt/nemo-gym/cache/uv
 RUN uv venv /opt/nemo-gym/cache/seed-venv && \
     UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/cache/seed-venv \
-        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray && \
+        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray \
+            --extra mlflow --extra wandb && \
     rm -rf /opt/nemo-gym/cache/seed-venv && \
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
 
@@ -246,6 +259,138 @@ if [[ -n "${NEMO_GYM_SEED_SERVER_ENVS:-}" ]]; then
     rm -rf "${seed_venv_root}"
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
 fi
+EOF
+
+# Seed the complete native setup closure for the affected current shards.
+# Root requirements, inherited pins and build isolation remain unchanged.
+COPY --from=shard-validation-source / /tmp/gym-selected-validation/
+COPY --from=nemo-gym resources_servers/partner_if/ /tmp/gym-selected-validation/resources_servers/partner_if/
+COPY --from=nemo-gym responses_api_agents/partner_if_dispatcher/ /tmp/gym-selected-validation/responses_api_agents/partner_if_dispatcher/
+RUN <<"EOF" bash -exu -o pipefail
+seed_venv_root="$(mktemp -d)"
+cd /tmp/gym-selected-validation
+python - <<'PYMETADATA'
+from pathlib import Path
+import hashlib
+
+for component, template, old_name, new_name in [
+    ("resources_servers/partner_if", "environment_servers/harbor", "gym-environment-servers-harbor", "gym-resources-servers-partner-if"),
+    ("responses_api_agents/partner_if_dispatcher", "responses_api_agents/simple_agent", "gym-responses-api-agents-simple-agent", "gym-responses-api-agents-partner-if-dispatcher"),
+]:
+    for filename in ("pyproject.toml", "uv.lock"):
+        data = Path(template, filename).read_text()
+        assert data.count(old_name) == 1, (template, filename)
+        Path(component, filename).write_text(data.replace(old_name, new_name))
+    Path(component, "requirements.txt").unlink()
+path = Path("resources_servers/partner_if/pyproject.toml")
+data = path.read_text()
+needle = '    "nemo-gym[dev,sandbox]",\n'
+assert data.count(needle) == 1
+path.write_text(data.replace(needle, needle + '    "markdown-it-py>=3,<4",\n'))
+path = Path("resources_servers/genrm_eval/pyproject.toml")
+data = path.read_text()
+needle = '    "tiktoken",\n'
+assert data.count(needle) == 1
+path.write_text(data.replace(needle, needle + '    "json-repair==0.30.3",\n'))
+PYMETADATA
+for component in resources_servers/genrm_eval resources_servers/partner_if responses_api_agents/partner_if_dispatcher; do
+    uv lock --project "${component}"
+done
+PYTHONPATH=/tmp/gym-selected-validation python - <<'PYVERIFY'
+from pathlib import Path
+import hashlib
+expected = {'resources_servers/genrm_eval/pyproject.toml': 'a3fa34ba7659d3327d01c163fa9230edea4081e71bc5c70b9d5026cbe56e5c4b',
+ 'resources_servers/genrm_eval/uv.lock': '6bd992bc46e2445e1f93e887f5f23439acb566c210be6e9fb07d796f788f3442',
+ 'resources_servers/partner_if/pyproject.toml': '31ebc871f9a9159d18b9679f9cad54ccb4b769a79b3dff3dae00704227833b03',
+ 'resources_servers/partner_if/uv.lock': 'ab62a81c24c719ec5c5beb53763b5daa99300ad0ca6a532d870acb22c2d4e461',
+ 'responses_api_agents/partner_if_dispatcher/pyproject.toml': 'd02b4b6107368712ee15818108a9705a95cfe59ef92f7421f6031394983c6e39',
+ 'responses_api_agents/partner_if_dispatcher/uv.lock': '0731e5f465774bbe7a732c5b28fe9518dc3fc2118203340c760e7265042a84aa'}
+for path, digest in expected.items():
+    assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest, path
+from nemo_gym.cli.env import SERVER_TYPE_KEYS, _select_shard
+modules = [p.parent for kind in SERVER_TYPE_KEYS for p in Path(kind).glob("*/README.md")]
+selected = {'1': ['environment_servers/legacy_agent',
+       'resources_servers/agentif',
+       'resources_servers/bigcodebench',
+       'resources_servers/chemeval',
+       'resources_servers/conversational_tool_use_simulation',
+       'resources_servers/equivalence_llm_judge',
+       'resources_servers/example_single_tool_call',
+       'resources_servers/fukuyamabench',
+       'resources_servers/graphwalks',
+       'resources_servers/image_tools',
+       'resources_servers/jailbreak_detection',
+       'resources_servers/longmt_eval',
+       'resources_servers/moldetox',
+       'resources_servers/omniscience',
+       'resources_servers/proof_genselect',
+       'resources_servers/ruler',
+       'resources_servers/simpleqa',
+       'resources_servers/swe_gym',
+       'resources_servers/swemer_ultra',
+       'resources_servers/terminal_bench_4',
+       'resources_servers/vlm_eval_kit',
+       'resources_servers/xstest',
+       'responses_api_agents/conversational_tool_use_domain_generation',
+       'responses_api_agents/gymnasium_agent',
+       'responses_api_agents/hermes_sandboxed_agent',
+       'responses_api_agents/miniswe_sandboxed_agent',
+       'responses_api_agents/partner_if_dispatcher',
+       'responses_api_agents/simple_agent',
+       'responses_api_agents/terminus_2_sandboxed_agent',
+       'responses_api_models/inference_provider'],
+ '6': ['resources_servers/aalcr',
+       'resources_servers/assaybench',
+       'resources_servers/calendar',
+       'resources_servers/code_fim',
+       'resources_servers/deepswe',
+       'resources_servers/example_multi_step',
+       'resources_servers/format_verification',
+       'resources_servers/genrm_eval',
+       'resources_servers/hotpotqa_qa',
+       'resources_servers/instruction_following',
+       'resources_servers/litmus_agent',
+       'resources_servers/math_with_code',
+       'resources_servers/ns_tools',
+       'resources_servers/partner_if',
+       'resources_servers/ragtruth',
+       'resources_servers/scicodepile',
+       'resources_servers/string_match',
+       'resources_servers/swebench',
+       'resources_servers/tales',
+       'resources_servers/ugphysics_judge',
+       'resources_servers/workplace_assistant',
+       'responses_api_agents/claude_code_agent',
+       'responses_api_agents/cvdp_agent',
+       'responses_api_agents/harness_exa_search',
+       'responses_api_agents/langgraph_agent',
+       'responses_api_agents/opencode_agent',
+       'responses_api_agents/proof_refinement_agent',
+       'responses_api_agents/swe_agents',
+       'responses_api_agents/vibench_agent',
+       'responses_api_models/switchyard_model']}
+for shard, paths in selected.items():
+    assert list(map(str, _select_shard(modules, int(shard), 8))) == paths, shard
+PYVERIFY
+for shard in 1 6; do
+    PYTHONPATH=/tmp/gym-selected-validation ng_test_all \
+        +setup_only=true +delete_venvs_after_each_test=true \
+        +num_shards=8 "+shard_index=${shard}" \
+        "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_venv_root}"
+done
+# Retain pinned Kilo tools for diagnostic admission, without waiving runtime setup.
+UV_PROJECT_ENVIRONMENT="${seed_venv_root}/kilocode" uv sync --locked \
+    --project responses_api_agents/kilocode_agent --no-dev
+bash responses_api_agents/kilocode_agent/install_kilo_runtime.sh \
+    /opt/nemo-gym/cache/kilo-runtime 7.4.15
+ln -s /opt/nemo-gym/cache/kilo-runtime/node/bin/node /usr/local/bin/node
+ln -s /opt/nemo-gym/cache/kilo-runtime/node/bin/npm /usr/local/bin/npm
+ln -s /opt/nemo-gym/cache/kilo-runtime/kilo/node_modules/.bin/kilo /usr/local/bin/kilo
+rm -rf "${seed_venv_root}" /tmp/gym-selected-validation
+chown -R "${RUNTIME_UID}:${RUNTIME_GID}" "${UV_CACHE_DIR}"
+command -v tmux
+command -v busybox
+command -v buildah
 EOF
 
 # Seed the pre-commit hook cache (PRE_COMMIT_HOME) so the image's offline lint
@@ -330,6 +475,12 @@ RUN export HOME=/home/nemo-runtime \
         /opt/nemo-gym/results/.nonroot-write-probe \
         "${venv_site_packages}/.nonroot-write-probe" && \
     gym --help >/dev/null && \
+    tmux -V && \
+    busybox true && \
+    buildah --version && \
+    node --version && \
+    npm --version && \
+    test "$(kilo --version)" = 7.4.15 && \
     uv venv /opt/nemo-gym/cache/container-smoke && \
     /opt/nemo-gym/cache/container-smoke/bin/python -c \
         "import sys; assert sys.version_info[:2] == (3, 13)" && \
