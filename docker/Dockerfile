@@ -265,7 +265,7 @@ EOF
 # Keep required tokenizer and sentence data outside TMPDIR so native offline
 # processes use the same immutable assets as the build-time setup.
 ENV TIKTOKEN_CACHE_DIR=/opt/nemo-gym/cache/tiktoken
-ENV NLTK_DATA=/opt/nemo-gym/cache/nltk_data
+ENV NLTK_DATA=/home/nemo-runtime/nltk_data
 
 # Seed the complete native setup closure for the affected current shards.
 # Root requirements, inherited pins and build isolation remain unchanged.
@@ -391,6 +391,12 @@ uv --no-config pip install --python "${seed_venv_root}/miniswe-native/bin/python
     -r responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
 "${seed_venv_root}/miniswe-native/bin/python" -c \
     "import importlib.metadata as m; assert m.version('mini-swe-agent') == '2.4.6'; assert m.version('litellm') == '1.106.0'; assert m.version('mcp') == '2.2.0'"
+# A locked sync seeds wheels but not all registry metadata required by the
+# no-config pip resolver. Seed exactly the final offline probe's requirements.
+uv --no-config pip install --python "${seed_venv_root}/miniswe-native/bin/python" \
+    'tiktoken==0.14.0' 'nltk==3.10.3' 'defusedxml'
+# NLTK authorizes only data locations without group/world-writable ancestry.
+install -d -m 0700 -o "${RUNTIME_UID}" -g "${RUNTIME_GID}" "${NLTK_DATA}"
 # Native genrm_eval verification resolves gpt-4o's encoding, and the unchanged
 # instruction-following startup checks NLTK punkt_tab before every request.
 # Seed both with their exact managed environments while build networking exists.
@@ -470,6 +476,7 @@ find /opt -name ray_dist.jar -delete
 # Keep ownership changes for generated caches and server venvs in the layer
 # that creates them so later layers do not duplicate their contents.
 chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache
+chown -R "${RUNTIME_UID}:${RUNTIME_GID}" "${NLTK_DATA}"
 find /opt/nemo-gym -type d -name .venv -prune \
     -exec chown -R "${RUNTIME_UID}:${RUNTIME_GID}" {} +
 EOF
