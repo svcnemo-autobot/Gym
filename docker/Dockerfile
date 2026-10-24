@@ -262,6 +262,11 @@ if [[ -n "${NEMO_GYM_SEED_SERVER_ENVS:-}" ]]; then
 fi
 EOF
 
+# Keep required tokenizer and sentence data outside TMPDIR so native offline
+# processes use the same immutable assets as the build-time setup.
+ENV TIKTOKEN_CACHE_DIR=/opt/nemo-gym/cache/tiktoken
+ENV NLTK_DATA=/opt/nemo-gym/cache/nltk_data
+
 # Seed the complete native setup closure for the affected current shards.
 # Root requirements, inherited pins and build isolation remain unchanged.
 COPY --from=shard-validation-source / /tmp/gym-selected-validation/
@@ -386,6 +391,31 @@ uv --no-config pip install --python "${seed_venv_root}/miniswe-native/bin/python
     -r responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
 "${seed_venv_root}/miniswe-native/bin/python" -c \
     "import importlib.metadata as m; assert m.version('mini-swe-agent') == '2.4.6'; assert m.version('litellm') == '1.106.0'; assert m.version('mcp') == '2.2.0'"
+# Native genrm_eval verification resolves gpt-4o's encoding, and the unchanged
+# instruction-following startup checks NLTK punkt_tab before every request.
+# Seed both with their exact managed environments while build networking exists.
+UV_PROJECT_ENVIRONMENT="${seed_venv_root}/genrm-data" uv sync --locked \
+    --project resources_servers/genrm_eval --no-dev
+"${seed_venv_root}/genrm-data/bin/python" - <<'PYTOKENIZER'
+import tiktoken
+
+encoding = tiktoken.encoding_for_model("gpt-4o")
+assert encoding.name == "o200k_base"
+assert encoding.decode(encoding.encode("native offline tokenizer probe")) == "native offline tokenizer probe"
+PYTOKENIZER
+UV_PROJECT_ENVIRONMENT="${seed_venv_root}/instruction-data" uv sync --locked \
+    --project resources_servers/instruction_following --no-dev
+"${seed_venv_root}/instruction-data/bin/python" - <<'PYSENTENCES'
+import os
+import socket
+
+import nltk
+
+socket.setdefaulttimeout(60)
+assert nltk.download("punkt_tab", download_dir=os.environ["NLTK_DATA"], raise_on_error=True)
+assert nltk.data.find("tokenizers/punkt_tab/english")
+assert nltk.sent_tokenize("One sentence. A second sentence.") == ["One sentence.", "A second sentence."]
+PYSENTENCES
 # Retain pinned Kilo tools for diagnostic admission, without waiving runtime setup.
 UV_PROJECT_ENVIRONMENT="${seed_venv_root}/kilocode" uv sync --locked \
     --project responses_api_agents/kilocode_agent --no-dev
@@ -511,6 +541,29 @@ uv --offline --no-config pip install --python "${probe}/venv/bin/python" \
     -r /opt/nemo-gym/responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
 "${probe}/venv/bin/python" -c \
     "import importlib.metadata as m; assert m.version('mini-swe-agent') == '2.4.6'; assert m.version('litellm') == '1.106.0'; assert m.version('mcp') == '2.2.0'"
+uv --offline --no-config pip install --python "${probe}/venv/bin/python" \
+    'tiktoken==0.14.0' 'nltk==3.10.3' 'defusedxml'
+"${probe}/venv/bin/python" - <<'PYOFFLINEDATA'
+import socket
+
+# Match the native app's pre-imports before NLTK installs its finder.
+import defusedxml.ElementTree
+import regex
+import nltk
+import tiktoken
+
+
+def deny_network(*args, **kwargs):
+    raise AssertionError("Tokenizer and sentence data probes must not access the network")
+
+
+socket.socket = deny_network
+encoding = tiktoken.encoding_for_model("gpt-4o")
+assert encoding.name == "o200k_base"
+assert encoding.decode(encoding.encode("native offline tokenizer probe")) == "native offline tokenizer probe"
+assert nltk.data.find("tokenizers/punkt_tab/english")
+assert nltk.sent_tokenize("One sentence. A second sentence.") == ["One sentence.", "A second sentence."]
+PYOFFLINEDATA
 rm -rf "${probe}"
 EOF
 
