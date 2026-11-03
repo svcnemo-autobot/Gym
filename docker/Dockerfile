@@ -216,14 +216,14 @@ RUN chown root:root /opt/nemo-gym && \
     UV_LINK_MODE=symlink uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray
 
 # Seed the runtime uv cache with the full dependency set (including the dev
-# extra and the project itself) so that CI scripts can run offline: setup_dev.sh
+# extra, core CI exporter extras, and the project itself) so CI scripts can run offline: setup_dev.sh
 # resolves `uv sync --extra dev --offline` from this cache in a fresh venv.
 # The runtime cache is separate from the root-owned build cache (/opt/uv/cache)
 # that backs the symlinked project environment.
 ENV UV_CACHE_DIR=/opt/nemo-gym/cache/uv
 RUN uv venv /opt/nemo-gym/cache/seed-venv && \
     UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/cache/seed-venv \
-        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray && \
+        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray --extra mlflow --extra wandb && \
     rm -rf /opt/nemo-gym/cache/seed-venv && \
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
 
