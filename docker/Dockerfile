@@ -176,8 +176,9 @@ COPY --from=nemo-gym --chown=${RUNTIME_UID}:${RUNTIME_GID} \
 # of pure-Python packages, and without it in the image nobody can switch tracing on with
 # an environment variable — they would have to rebuild. Off remains the default: the code
 # is inert until NEMO_LENS_ENABLED=1.
+# Include the optional SDKs exercised by the unchanged core CI launcher.
 RUN uv venv --seed && \
-    uv sync --link-mode symlink --locked --extra vllm --extra telemetry --extra dev --extra ray --no-install-project
+    uv sync --link-mode symlink --locked --extra vllm --extra telemetry --extra dev --extra ray --extra mlflow --extra wandb --no-install-project
 
 ENV PATH="/opt/nemo_gym_venv/bin:$PATH"
 
@@ -213,7 +214,7 @@ COPY --from=nemo-gym --chown=${RUNTIME_UID}:${RUNTIME_GID} \
 # worktree was created for the runtime UID in the base stage, so restore build ownership
 # before setuptools invokes Git.
 RUN chown root:root /opt/nemo-gym && \
-    UV_LINK_MODE=symlink uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray
+    UV_LINK_MODE=symlink uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray --extra mlflow --extra wandb
 
 # Seed the runtime uv cache with the full dependency set (including the dev
 # extra and the project itself) so that CI scripts can run offline: setup_dev.sh
@@ -223,7 +224,7 @@ RUN chown root:root /opt/nemo-gym && \
 ENV UV_CACHE_DIR=/opt/nemo-gym/cache/uv
 RUN uv venv /opt/nemo-gym/cache/seed-venv && \
     UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/cache/seed-venv \
-        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray && \
+        uv sync --locked --extra vllm --extra telemetry --extra dev --extra ray --extra mlflow --extra wandb && \
     rm -rf /opt/nemo-gym/cache/seed-venv && \
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
 
@@ -237,11 +238,12 @@ RUN uv venv /opt/nemo-gym/cache/seed-venv && \
 # `ng_test_all +setup_only=true` installs each venv exactly as the server suite
 # does (same discovery, requirements, and head-server pins), outside the source
 # tree, and deletes it; only the downloaded and built distributions stay.
-ARG NEMO_GYM_SEED_SERVER_ENVS=""
+# This temporary validation image seeds only the native shard containing SciCode.
+ARG NEMO_GYM_SEED_SERVER_ENVS="1"
 RUN <<"EOF" bash -exu
 if [[ -n "${NEMO_GYM_SEED_SERVER_ENVS:-}" ]]; then
     seed_venv_root="$(mktemp -d)"
-    ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+    ng_test_all +setup_only=true +delete_venvs_after_each_test=true +num_shards=8 +shard_index=2 \
         "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_venv_root}"
     rm -rf "${seed_venv_root}"
     chown -R "${RUNTIME_UID}:${RUNTIME_GID}" /opt/nemo-gym/cache/uv
