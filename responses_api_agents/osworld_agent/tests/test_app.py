@@ -19,10 +19,9 @@ import pytest
 import ray
 from fastapi.testclient import TestClient
 
-from nemo_gym.config_types import AggregateMetricsRequest, ModelServerRef
-from nemo_gym.global_config import ROLLOUT_INDEX_KEY_NAME, TASK_INDEX_KEY_NAME
-from nemo_gym.openai_utils import NeMoGymResponseCreateParamsNonStreaming
-from nemo_gym.server_utils import ServerClient
+from nemo_gym.client import ServerClient
+from nemo_gym.config import ROLLOUT_INDEX_KEY_NAME, TASK_INDEX_KEY_NAME, AggregateMetricsRequest, ModelServerRef
+from nemo_gym.core import NeMoGymResponseCreateParamsNonStreaming
 from responses_api_agents.osworld_agent.app import (
     OSWorldAgent,
     OSWorldAgentConfig,
@@ -2228,3 +2227,227 @@ class TestApp:
         assert response.reward == 0.0
         assert response.verifier_metadata["osworld_score"] == 0.4
         assert response.verifier_metadata["osworld_finished"] is False
+
+
+def _policy_completion(content: str, finish_reason: str, usage: Optional[Dict[str, Any]]) -> Any:
+    from openai.types.chat import ChatCompletion
+
+    return ChatCompletion.model_validate(
+        {
+            "id": "chatcmpl-policy",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "policy",
+            "choices": [
+                {"index": 0, "finish_reason": finish_reason, "message": {"role": "assistant", "content": content}}
+            ],
+            "usage": usage,
+        }
+    )
+
+
+def _chat_usage(prompt: int, cached: int, completion: int, reasoning: int) -> Dict[str, Any]:
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "prompt_tokens_details": {"cached_tokens": cached},
+        "completion_tokens_details": {"reasoning_tokens": reasoning},
+    }
+
+
+def _child_result(**fields: Any) -> SimpleNamespace:
+    steps = [SimpleNamespace(**step, state=None, next_state=None) for step in DEFAULT_RUN_RESULT["steps"]]
+    values = {k: v for k, v in DEFAULT_RUN_RESULT.items() if k != "steps"}
+    return SimpleNamespace(**values, termination_reason="done", agent_contract=None, steps=steps, **fields)
+
+
+def _run_child(fake_run_osworld_task: Any, completions: list[Any]) -> Dict[str, Any]:
+    from responses_api_agents.osworld_agent.app import _run_osworld_task_remote
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = completions
+    runner_kwargs = {
+        "base_url": "http://policy/v1",
+        "model_name": "policy",
+        "api_key": "test-key",  # pragma: allowlist secret
+        "max_tokens": 64,
+        "temperature": 1.0,
+        "top_p": None,
+    }
+    with (
+        patch("responses_api_agents.osworld_agent.app._build_policy_openai_client", return_value=client),
+        patch("responses_api_agents.osworld_agent.client.run_osworld_task", side_effect=fake_run_osworld_task),
+    ):
+        return _run_osworld_task_remote._function({"id": "test-task-001"}, runner_kwargs)
+
+
+def test_child_result_sums_usage_of_every_policy_response_gym_received() -> None:
+    def fake_run_osworld_task(task_config, *, model_fn, messages_model_fn, **kwargs):
+        model_fn("system", "Open the browser.", [{"screenshot_b64": ""}])
+        # A response rejected for its finish reason still finished, so its tokens count.
+        with pytest.raises(ValueError, match="did not finish cleanly"):
+            messages_model_fn(
+                [{"role": "user", "content": "next"}],
+                {"model": "policy", "max_tokens": 8, "temperature": 0.0, "_nemo_gym_require_stop": True},
+            )
+        model_fn("system", "Open the browser.", [{"screenshot_b64": ""}])
+        return _child_result()
+
+    result = _run_child(
+        fake_run_osworld_task,
+        [
+            _policy_completion("```python\npyautogui.click(1, 2)\n```", "stop", _chat_usage(1000, 256, 50, 10)),
+            _policy_completion("```python\npyautogui", "length", _chat_usage(1200, 512, 8, 8)),
+            _policy_completion("```DONE```", "stop", _chat_usage(1500, 768, 60, 12)),
+        ],
+    )
+    expected = {
+        "input_tokens": 3700,
+        "input_tokens_details": {"cached_tokens": 1536},
+        "output_tokens": 118,
+        "output_tokens_details": {"reasoning_tokens": 30},
+        "total_tokens": 3818,
+    }
+    assert result["usage"] == expected
+
+    response = _build_response(make_run_request(osworld_task=DEFAULT_OSWORLD_TASK), result, "test-policy", 1.0, 0.9)
+    assert response.response.usage.model_dump(mode="json") == expected
+
+
+def test_child_result_usage_is_unknown_when_the_runner_calls_its_own_model_client() -> None:
+    # m3_agent and pointer_agent call the model through their own clients, which Gym does not see.
+    def fake_native_runner(task_config, **kwargs):
+        return _child_result()
+
+    result = _run_child(fake_native_runner, [])
+
+    assert result["usage"] is None
+    response = _build_response(make_run_request(osworld_task=DEFAULT_OSWORLD_TASK), result, "test-policy", 1.0, 0.9)
+    assert response.response.usage is None
+
+
+def test_policy_usage_treats_a_malformed_usage_block_as_unknown() -> None:
+    from openai.types.completion_usage import CompletionUsage
+
+    from responses_api_agents.osworld_agent.app import _PolicyUsage
+
+    policy_usage = _PolicyUsage()
+    # The SDK builds responses without validating them, so a provider's partial usage block arrives as-is.
+    partial = CompletionUsage.model_construct(prompt_tokens=None, completion_tokens=5, total_tokens=None)
+    policy_usage.add(SimpleNamespace(usage=partial))
+    assert policy_usage.reported() is None
+
+    # A later known call does not turn the lost usage into a complete total.
+    policy_usage.add(_policy_completion("```DONE```", "stop", _chat_usage(1500, 768, 60, 12)))
+    assert policy_usage.reported() is None
+
+
+@pytest.mark.parametrize("unknown_first", [True, False])
+def test_child_result_usage_is_unknown_when_a_finished_response_lost_its_usage(unknown_first: bool) -> None:
+    def fake_run_osworld_task(task_config, *, model_fn, messages_model_fn, **kwargs):
+        model_fn("system", "Open the browser.", [{"screenshot_b64": ""}])
+        model_fn("system", "Open the browser.", [{"screenshot_b64": ""}])
+        return _child_result()
+
+    known = _policy_completion("```python\npyautogui.click(1, 2)\n```", "stop", _chat_usage(1000, 256, 50, 10))
+    unknown = _policy_completion("```DONE```", "stop", None)
+    result = _run_child(fake_run_osworld_task, [unknown, known] if unknown_first else [known, unknown])
+
+    # Rollout usage is the sum over finished responses; one whose usage was lost makes it unknown, not a subtotal.
+    assert result["usage"] is None
+    response = _build_response(make_run_request(osworld_task=DEFAULT_OSWORLD_TASK), result, "test-policy", 1.0, 0.9)
+    assert response.response.usage is None
+
+
+def _start_timeout_result(http_status: Optional[int] = 502) -> Dict[str, Any]:
+    """What run_osworld_task returns when the sandbox guest never became ready."""
+    return DEFAULT_RUN_RESULT | {
+        "reward": 0.0,
+        "score": 0.0,
+        "finished": False,
+        "steps": [],
+        "evaluation_completed": False,
+        "runtime_eligible": False,
+        "runtime_admission_reason": "rollout_error",
+        "mask_sample": True,
+        "termination_reason": "rollout_error",
+        "error": "RuntimeError: environment start failed\nTraceback (most recent call last): ...",
+        "sandbox_start_failure": {
+            "provider": "docker",
+            "http_status": http_status,
+            "message": f"OSWorld guest did not become ready within 900s: HTTP {http_status}, bytes=0",
+            "sandbox_id": "sbx-1",
+        },
+    }
+
+
+def test_a_sandbox_start_timeout_is_a_typed_infrastructure_error_row() -> None:
+    response = _build_response(
+        make_run_request(osworld_task=DEFAULT_OSWORLD_TASK), _start_timeout_result(), "test-policy", 1.0, 0.9
+    )
+    row = response.model_dump(mode="json")
+
+    assert (row["failure_kind"], row["_ng_failure_class"]) == ("infrastructure_error", "infrastructure_error")
+    assert (row["reward"], row["mask_sample"], row["evaluation_completed"]) == (0.0, True, False)  # no score change
+    assert (row["sandbox_provider"], row["sandbox_http_status"], row["sandbox_id"]) == ("docker", 502, "sbx-1")
+    event = row["_ng_failure_events"][row["_ng_failure_id"]]
+    assert event["operation_id"] == "sbx-1"
+    assert (event["boundary"], event["failure_kind"], event["operation"], event["http_status"]) == (
+        "agent",
+        "infrastructure_error",
+        "osworld.sandbox_start",
+        502,
+    )
+    assert event["failure_reason"] == (
+        "OSWorld sandbox start failed on provider=docker: "
+        "TimeoutError: OSWorld guest did not become ready within 900s: HTTP 502, bytes=0"
+    )
+
+
+def test_a_result_without_a_sandbox_start_failure_has_no_failure_fields() -> None:
+    row = _build_response(
+        make_run_request(osworld_task=DEFAULT_OSWORLD_TASK), DEFAULT_RUN_RESULT, "test-policy", 1.0, 0.9
+    ).model_dump(mode="json")
+    assert row.get("failure_kind") is None
+    assert not {"_ng_failure_class", "_ng_failure_events", "sandbox_provider"} & set(row)
+
+
+def test_a_sandbox_start_timeout_is_retried_within_the_attempt_cap_and_then_stops(tmp_path, monkeypatch) -> None:
+    from nemo_gym.rollouts import RolloutStore, RunManifest
+
+    monkeypatch.setenv("NEMO_GYM_MAX_ROLLOUT_ATTEMPTS", "2")
+    rows = [{TASK_INDEX_KEY_NAME: 0, ROLLOUT_INDEX_KEY_NAME: 0, "agent_ref": {"name": "osworld"}}]
+    source = tmp_path / "source.jsonl"
+    source.write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows))
+
+    def prepare():
+        return rows, RunManifest.create(source, rows, {}, {"osworld": {"responses_api_agents": {}}})
+
+    output = tmp_path / "rollouts.jsonl"
+    failure = _build_response(
+        make_run_request(osworld_task=DEFAULT_OSWORLD_TASK), _start_timeout_result(), "test-policy", 1.0, 0.9
+    ).model_dump(mode="json")
+    for attempt in range(2):
+        with RolloutStore.start_or_resume(output, prepare, resume=attempt > 0) as store:
+            (row,) = store.pending()  # retried: the run still has a failure attempt for this task
+            store.record_dispatch(row)
+            store.record_outcome(row | failure)
+
+    with RolloutStore.start_or_resume(output, prepare, resume=True) as store:
+        assert store.pending() == []  # stopped: both attempts are spent
+        (saved,) = store.failures()
+        assert saved["failure_kind"] == "infrastructure_error" and saved["sandbox_http_status"] == 502
+
+
+def test_the_ray_child_carries_the_sandbox_start_failure_and_defaults_it_for_other_runners() -> None:
+    failure = {
+        "provider": "docker",
+        "http_status": 502,
+        "message": "OSWorld guest did not become ready within 900s: HTTP 502, bytes=0",
+    }
+
+    carried = _run_child(lambda task_config, **kwargs: _child_result(sandbox_start_failure=failure), [])
+    assert carried["sandbox_start_failure"] == failure
+    # A runner whose own result type has no such attribute still returns a result.
+    assert _run_child(lambda task_config, **kwargs: _child_result(), [])["sandbox_start_failure"] is None

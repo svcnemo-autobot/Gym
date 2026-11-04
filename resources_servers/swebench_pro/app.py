@@ -32,7 +32,29 @@ from fastapi import Body, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from nemo_gym.base_resources_server import (
+from nemo_gym.agents import lifecycle_observation, restricted_network_policy, sandbox_server_url
+from nemo_gym.client import SESSION_ID_KEY
+from nemo_gym.config import ModelServerRef, get_global_config_dict
+from nemo_gym.core import (
+    VERIFIER_ERROR,
+    EpisodeId,
+    FailureBoundary,
+    NgFailureEvent,
+    TaskId,
+    current_verifier_invocation_id,
+    observe_failure,
+)
+from nemo_gym.sandbox import (
+    AsyncSandbox,
+    ConnectableProvider,
+    DirectSandboxConnection,
+    SandboxAccess,
+    SandboxResources,
+    SandboxSpec,
+    resolve_provider_config,
+    resolve_provider_metadata,
+)
+from nemo_gym.server_runtime import (
     BaseResourcesServerConfig,
     BaseSeedSessionRequest,
     BaseSeedSessionResponse,
@@ -40,17 +62,14 @@ from nemo_gym.base_resources_server import (
     BaseVerifyResponse,
     ResourcesCloseSessionRequest,
     ResourcesCloseSessionResponse,
+    ResourcesSeedRejectedError,
     ResourcesSeedSessionRequest,
     ResourcesSeedSessionResponse,
+    ResourcesSessionConflictError,
+    ResourcesSessionFence,
     SimpleResourcesServer,
+    lost_session_verification,
 )
-from nemo_gym.episode_types import EpisodeId, TaskId
-from nemo_gym.global_config import get_global_config_dict
-from nemo_gym.sandbox import AsyncSandbox, SandboxResources, SandboxSpec
-from nemo_gym.sandbox.access import DirectSandboxConnection, SandboxAccess
-from nemo_gym.sandbox.config import resolve_provider_config, resolve_provider_metadata
-from nemo_gym.sandbox.providers.base import ConnectableProvider
-from nemo_gym.server_utils import SESSION_ID_KEY
 from resources_servers.swebench_pro.image_cache import digest_hex, verify_local_image
 from resources_servers.swebench_pro.verification import (
     DEFAULT_ENVIRONMENT_REPAIRS,
@@ -110,6 +129,22 @@ def _attempt_budget(attempt_timeout: float | None, deadline: float | None) -> fl
     return min(attempt_timeout, remaining)
 
 
+class PatchCaptureLostError(RuntimeError):
+    """The agent sandbox did not report how ``git diff`` ended or did not return its output, so the patch is unknown."""
+
+
+class SWEBenchProTaskNetworkPolicy(BaseModel):
+    """Allow only the model server host for task egress, on every port and route.
+
+    Requires an OpenSandbox deployment enforcing network policies with dns+nft.
+    Grading sandboxes retain the original sandbox_config.provider_options.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_server: ModelServerRef
+
+
 class SWEBenchProResourcesServerConfig(BaseResourcesServerConfig):
     is_verifying_golden_patch: bool = False
     apply_anti_cheating: bool = True
@@ -139,6 +174,7 @@ class SWEBenchProResourcesServerConfig(BaseResourcesServerConfig):
     image_template: str | None = None  # Local SIF path with a checked provenance manifest.
     sandbox_provider: str
     sandbox_config: dict[str, Any]
+    task_network_policy: SWEBenchProTaskNetworkPolicy | None = None
 
 
 class SWEBenchProInstanceRequest(BaseModel):
@@ -186,6 +222,9 @@ class SWEBenchProVerifyRequest(SWEBenchProInstanceRequest, BaseVerifyRequest):
 
 
 class SWEBenchProVerifyResponse(BaseVerifyResponse):
+    model_config = ConfigDict(serialize_by_alias=True)
+
+    verification_attempts: int | None = Field(default=None, exclude_if=lambda value: value is None)
     image_provenance: dict[str, Any] = Field(default_factory=dict)
     evaluation_completed: bool
     eval_timed_out: bool = False
@@ -199,10 +238,12 @@ class SWEBenchProVerifyResponse(BaseVerifyResponse):
     test_output: str
     error: str | None
     log_dir: str
+    # Lifecycle facts of the sandbox that produced this grade; the agent attaches it as a verifier SandboxObservation.
+    verifier_sandbox_observation: dict[str, Any] | None = None
+    verifier_sandbox_observations: list[dict[str, Any] | None] | None = None
 
 
 class SWEBenchProResourcesServer(SimpleResourcesServer):
-    ray_enabled = False
     config: SWEBenchProResourcesServerConfig
 
     def model_post_init(self, context: Any, /) -> None:
@@ -214,8 +255,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
         self._session_id_to_pristine_untracked: dict[str, frozenset[str]] = {}
         # Typed sessions, which an Environment Server seeds and closes by resources_session_id.
         self._session_id_to_identity: dict[str, tuple[EpisodeId, TaskId]] = {}
-        self._session_locks: dict[str, asyncio.Lock] = {}
-        self._closed_sessions: dict[str, EpisodeId] = {}
+        self._fence = ResourcesSessionFence(self.config.session_close_retry_window_seconds)
 
     def setup_webserver(self) -> FastAPI:
         app = super().setup_webserver()
@@ -250,20 +290,20 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
         except ValidationError as error:
             raise RequestValidationError(error.errors()) from error
         session_id = typed.resources_session_id
-        lock = self._session_locks.setdefault(session_id, asyncio.Lock())
-        async with lock:
-            closed_episode_id = self._closed_sessions.get(session_id)
+        # The body names the session, so a close without a cookie (after a lost seed reply) still releases it.
+        async with self._fence.locked(session_id):
+            closed_episode_id = self._fence.closed_episode(session_id)
             if closed_episode_id is not None:
                 if typed.episode_id != closed_episode_id:
-                    raise ValueError("episode_id does not match the closed resources session")
+                    raise ResourcesSessionConflictError("episode_id does not match the closed resources session")
                 request.session.pop(SESSION_ID_KEY, None)
                 return ResourcesCloseSessionResponse(resources_session_id=session_id)
             identity = self._session_id_to_identity.get(session_id)
             if identity is not None and typed.episode_id != identity[0]:
-                raise ValueError("episode_id does not match the seeded resources session")
+                raise ResourcesSessionConflictError("episode_id does not match the seeded resources session")
             await self._stop_session_sandbox(session_id)
             self._session_id_to_identity.pop(session_id, None)
-            self._closed_sessions[session_id] = typed.episode_id
+            self._fence.mark_closed(session_id, typed.episode_id)
             request.session.pop(SESSION_ID_KEY, None)
             return ResourcesCloseSessionResponse(resources_session_id=session_id)
 
@@ -277,8 +317,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
 
     async def shutdown(self) -> None:
         self._session_id_to_identity.clear()
-        self._session_locks.clear()
-        self._closed_sessions.clear()
+        self._fence.clear()
         for session_id in list(self._session_id_to_sandbox):
             try:
                 await self._stop_session_sandbox(session_id)
@@ -307,10 +346,18 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
         self,
         body: SWEBenchProInstanceRequest,
         files: dict[str, str] | None = None,
+        *,
+        task: bool = False,
     ) -> AsyncSandbox:
         global_config_dict = get_global_config_dict()
         provider_config = resolve_provider_config(self.config.sandbox_provider, global_config_dict)
         provider_metadata = resolve_provider_metadata(self.config.sandbox_provider, global_config_dict)
+        provider_options = self.config.sandbox_config.get("provider_options", {})
+        if task and self.config.task_network_policy is not None:
+            model_url = sandbox_server_url(self.config.task_network_policy.model_server.name, require_reachable=True)
+            # Replace rather than extend any baseline allowlist. Grading keeps the original options.
+            provider_options = dict(provider_options or {})
+            provider_options["network_policy"] = restricted_network_policy(next(iter(provider_config)), [model_url])
         image_info = await asyncio.to_thread(self._image_info, body)
         spec = SandboxSpec(
             image=image_info["image"],
@@ -327,7 +374,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
             },
             resources=SandboxResources.from_mapping(self.config.sandbox_config.get("resources", {})),
             entrypoint=None,
-            provider_options=self.config.sandbox_config.get("provider_options", {}),
+            provider_options=provider_options,
         )
         sandbox = AsyncSandbox(provider_config)
         await sandbox.start(spec)
@@ -360,19 +407,25 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
             return await self._seed_session(request.session[SESSION_ID_KEY], body)
 
         session_id = body.resources_session_id
-        request.session[SESSION_ID_KEY] = session_id
-        lock = self._session_locks.setdefault(session_id, asyncio.Lock())
-        async with lock:
-            if session_id in self._closed_sessions:
-                raise ValueError(f"Resources session is already closed: {session_id}")
+        # The cookie is bound only once the seed succeeds: a refused seed's reply would otherwise point this client at
+        # the session it was refused, which may belong to another episode.
+        async with self._fence.locked(session_id):
+            self._fence.raise_if_closed(session_id)
             identity = self._session_id_to_identity.get(session_id)
             if identity is not None:
                 if identity != (body.episode_id, body.task_id):
-                    raise ValueError("resources_session_id is already bound to another episode or task")
-                return await self._typed_seed_response(session_id)
-            task = SWEBenchProInstanceRequest.model_validate(body.task_data)
+                    raise ResourcesSessionConflictError(
+                        "resources_session_id is already bound to another episode or task"
+                    )
+                response = await self._typed_seed_response(session_id)
+                request.session[SESSION_ID_KEY] = session_id
+                return response
+            try:
+                task = SWEBenchProInstanceRequest.model_validate(body.task_data)
+            except ValidationError as error:
+                raise ResourcesSeedRejectedError(f"task_data is not a SWE-bench Pro instance: {error}") from error
             if body.task_id.task_id != task.instance_id:
-                raise ValueError("TaskId does not match the SWE-bench Pro instance_id")
+                raise ResourcesSeedRejectedError("TaskId does not match the SWE-bench Pro instance_id")
             await self._seed_session(session_id, task)
             try:
                 response = await self._typed_seed_response(session_id)
@@ -381,6 +434,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
                 await self._stop_session_sandbox(session_id)
                 raise
             self._session_id_to_identity[session_id] = (body.episode_id, body.task_id)
+            request.session[SESSION_ID_KEY] = session_id
             return response
 
     async def _typed_seed_response(self, session_id: str) -> ResourcesSeedSessionResponse:
@@ -397,7 +451,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
 
     async def _seed_session(self, session_id: str, body: SWEBenchProInstanceRequest) -> SWEBenchProSeedSessionResponse:
         await self._stop_session_sandbox(session_id)
-        sandbox = await self._create_sandbox(body)
+        sandbox = await self._create_sandbox(body, task=True)
         # Keep ownership before initialization, including when cleanup itself fails.
         self._session_id_to_sandbox[session_id] = sandbox
         try:
@@ -466,17 +520,27 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
         pristine_untracked = self._session_id_to_pristine_untracked.get(session_id, frozenset())
         patch_path = f"/tmp/nemo-gym-swebench-pro-{uuid4().hex}.diff"
         try:
-            result = await original_sandbox.exec(
-                f"umask 077; git -C /app add -N . && git -C /app --no-pager diff {quote(base_commit)}"
-                f" > {quote(patch_path)}"
-            )
+            try:
+                result = await original_sandbox.exec(
+                    f"umask 077; git -C /app add -N . && git -C /app --no-pager diff {quote(base_commit)}"
+                    f" > {quote(patch_path)}"
+                )
+            except Exception as exc:
+                raise PatchCaptureLostError(f"git diff exec failed: {exc}") from exc
+            error_type = getattr(result, "error_type", None)
+            if error_type is not None:
+                raise PatchCaptureLostError(f"git diff exec reported no exit code ({error_type})")
             if result.return_code != 0:
                 raise RuntimeError(result.stderr or "git diff failed")
-            # Command logs can drop line endings; download the patch bytes instead.
-            with TemporaryDirectory(prefix="nemo-gym-swebench-pro-") as directory:
-                local_patch = Path(directory) / "model.diff"
-                await original_sandbox.download(patch_path, local_patch)
-                patch = local_patch.read_bytes().decode("utf-8", errors="replace")
+            # Command logs can drop line endings; download the patch bytes instead. A failed cleanup of the local copy
+            # must not discard bytes already read.
+            try:
+                with TemporaryDirectory(prefix="nemo-gym-swebench-pro-", ignore_cleanup_errors=True) as directory:
+                    local_patch = Path(directory) / "model.diff"
+                    await original_sandbox.download(patch_path, local_patch)
+                    patch = local_patch.read_bytes().decode("utf-8", errors="replace")
+            except Exception as exc:
+                raise PatchCaptureLostError(f"patch download failed: {exc}") from exc
             return drop_patch_sections(patch, pristine_untracked)
         finally:
             try:
@@ -497,20 +561,21 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
         body: SWEBenchProVerifyRequest,
     ) -> SWEBenchProVerifyResponse:
         session_id = request.session[SESSION_ID_KEY]
-        # A typed session's sandbox is consumed by its first verify. Grading again would score an empty
-        # patch with a normal-looking reward, so a repeated verify fails instead.
-        if (
-            not self.config.is_verifying_golden_patch
-            and session_id in self._session_id_to_identity
-            and session_id not in self._session_id_to_sandbox
-        ):
-            raise ValueError("SWE-bench Pro task sandbox is no longer available")
+        # A session with no task sandbox (an earlier verify consumed it, a close released it, or the server never held
+        # it) has nothing left to grade: grading would score an empty patch as a policy that changed nothing, so the
+        # sample is masked. So is an extraction whose git diff exec reported no exit code. Any other failed extraction
+        # from a live sandbox stays an unmasked failure, since the agent can cause it.
+        if not self.config.is_verifying_golden_patch and session_id not in self._session_id_to_sandbox:
+            return _lost_session_response(body, "SWE-bench Pro task sandbox is no longer available")
         extraction_error = None
         if self.config.is_verifying_golden_patch:
             model_patch = body.patch
         else:
             try:
                 model_patch = await self._extract_model_patch(session_id, body.base_commit)
+            except PatchCaptureLostError as exc:
+                # Grading "" here would score a patch nobody captured as a policy that changed nothing.
+                return _lost_session_response(body, f"Failed to extract model patch: {exc}")
             except Exception as exc:
                 model_patch = ""
                 extraction_error = f"Failed to extract model patch: {exc}"
@@ -526,7 +591,10 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
         patch_verification_time_taken = 0.0
         attempts = 1 + max(self.config.inconclusive_verification_retries, 0)
         deadline = _verification_deadline(self.config.verification_total_timeout)
+        verifier_sandbox_observation = None
+        verifier_sandbox_observations = []
         for attempt in range(1, attempts + 1):
+            attempt_error: Exception | None = None
             eval_sandbox: AsyncSandbox | None = None
             start_time = time()
             try:
@@ -542,6 +610,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
                     )
                     patch_verification_time_taken = time() - verification_start
             except Exception as exc:
+                attempt_error = exc
                 eval_sandbox_start_time_taken = time() - start_time
                 patch_verification_time_taken = 0.0
                 result = VerificationResult(
@@ -558,8 +627,36 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
                             await eval_sandbox.stop()
                     except Exception:
                         print("Failed to stop verification sandbox", format_exc(), file=sys.stderr)
+            # Observation is best effort and cannot replace the calculated grade or original error.
+            try:
+                verifier_sandbox_observation = lifecycle_observation(eval_sandbox, role="verifier")
+            except Exception:
+                print("Failed to observe verification sandbox", format_exc(), file=sys.stderr)
+                verifier_sandbox_observation = None
+            verifier_sandbox_observations.append(verifier_sandbox_observation)
 
             reason = inconclusive_reason(result)
+            if reason is not None:
+                # Record the actual failed attempt without selecting a retry or claiming a model failure.
+                # Only an exception before sandbox assignment identifies allocation as the failing operation.
+                allocation_failed = attempt_error is not None and eval_sandbox is None
+                operation_id = current_verifier_invocation_id()
+                observed = NgFailureEvent(
+                    boundary=FailureBoundary.RESOURCES_SERVER,
+                    failure_kind=VERIFIER_ERROR,
+                    failure_reason=(
+                        "Verifier sandbox allocation failed"
+                        if allocation_failed
+                        else "Verification produced no conclusive verdict"
+                    ),
+                    operation="verify.sandbox.allocate" if allocation_failed else "verify",
+                    operation_id=operation_id,
+                    attempt_id=f"{operation_id}:{attempt}" if operation_id is not None else None,
+                    stage="verification",
+                    exception_type=type(attempt_error).__name__ if attempt_error is not None else None,
+                )
+                observed.__cause__ = attempt_error
+                observe_failure(observed)
             if reason is not None and _budget_spent(deadline):
                 print(
                     f"Verification for {body.instance_id} gave up after {attempt} attempt(s): "
@@ -581,9 +678,14 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
                 file=sys.stderr,
             )
 
+        # The request allows extra fields, so response-owned fields a caller sent are overwritten, not passed through.
         response_data = body.model_dump() | {
             "image_provenance": await asyncio.to_thread(self._image_info, body),
             "reward": float(result.resolved),
+            "mask_sample": False,
+            "failure_kind": None,
+            "failure_reason": None,
+            "verification_attempts": attempt,
             "evaluation_completed": result.completed and reason is None,
             "eval_timed_out": result.timed_out,
             "resolved": result.resolved,
@@ -596,8 +698,53 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
             "test_output": result.test_output,
             "error": extraction_error or result.error or reason,
             "log_dir": str(run_log_dir),
+            # Older observation schemas forbid unknown fields; the plural field retains the full facts.
+            "verifier_sandbox_observation": {
+                key: value
+                for key, value in verifier_sandbox_observation.items()
+                if key not in {"observed_client_interval_s", "teardown_confirmed", "cleanup_errors"}
+            }
+            if verifier_sandbox_observation is not None
+            else None,
+            "verifier_sandbox_observations": verifier_sandbox_observations,
         }
+        if reason is not None:
+            # The saved patch has no conclusive verdict. A collection retry would run the agent again;
+            # this stateful verifier cannot yet reverify that patch through the public CLI.
+            response_data |= {
+                "mask_sample": True,
+                "failure_kind": VERIFIER_ERROR,
+                "failure_reason": result.error or reason,
+                "model_patch": model_patch,
+                "verification_attempts": attempt,
+            }
+        # The adapter supplies typed verifier facts; collector-owned routing markers cannot cross a native episode.
+        response_data.pop("_ng_failure_class", None)
+        response_data.pop("_ng_failure_judge_error", None)
         return SWEBenchProVerifyResponse.model_validate(response_data)
+
+
+def _lost_session_response(body: SWEBenchProVerifyRequest, reason: str) -> SWEBenchProVerifyResponse:
+    """A masked, unscored verify response for a rollout whose task sandbox state could not be read."""
+    return SWEBenchProVerifyResponse.model_validate(
+        body.model_dump()
+        | lost_session_verification(reason)
+        | {
+            "evaluation_completed": False,
+            "eval_timed_out": False,
+            "image_provenance": {},
+            "resolved": False,
+            "patch_applied": False,
+            "eval_sandbox_start_time_taken": 0.0,
+            "patch_verification_time_taken": 0.0,
+            "instance_id": body.instance_id,
+            "model_patch": None,
+            "test_results": None,
+            "test_output": "",
+            "error": reason,
+            "log_dir": "",
+        }
+    )
 
 
 if __name__ == "__main__":

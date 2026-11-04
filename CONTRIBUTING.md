@@ -209,7 +209,8 @@ Gym has three CI entry points:
 workflows run automatically for verified commits from NVIDIA-NeMo members. If
 your commits are unverified, or you are an external contributor, these trusted
 workflows do not start until a qualified NVIDIA-NeMo vetter comments
-`/ok to test <full commit SHA>` on the PR. Approval applies to the current
+`/ok to test <full commit SHA>` on the PR. Use the full 40-character SHA
+(`git rev-parse HEAD`), not an abbreviation. Approval applies to the current
 head; after an unverified head changes, a qualified vetter must approve the new
 full SHA.
 GitHub-hosted checks such as lint, copyright, secrets, DCO, and the Fern preview
@@ -366,3 +367,21 @@ dispatch, with no change detection:
 - **Wheel install test** — builds the wheel, installs it in a fresh venv against a mock inference endpoint, and runs `ng_help`, `ng_dump_config`, `ng_init_resources_server`, `ng_run`, and `ng_collect_rollouts` end-to-end.
 - **Slack notification** — reports failures for eligible `main` or release refs;
   a manually dispatched run may disable notification.
+
+## Pull-request reviews
+
+Comment `/review` on a pull request for the formal review service. Use
+`/review mode=strict` for deeper analysis, or add `model=claude` to select a
+Claude reviewer instead of the default Codex reviewer. `/review help` lists
+all options. Reviews are explicitly requested, not automatically run on
+pull-request events.
+
+The retired `/claude review` and `/claude strict-review` commands only reply
+with migration instructions when posted as an exact command by an
+owner, member, or collaborator. Other commenters, bots, and quoted mentions
+do not trigger a notice. These commands never run or automatically request a review.
+
+The repository policy lives in `.agents/skills/pr-review/SKILL.md`. The review service
+must load this rubric from protected `main`, not the pull-request branch.
+Before relying on repository-specific reviews, publish the rubric, register
+its repository profile, and verify a Ready plugin snapshot containing it.
