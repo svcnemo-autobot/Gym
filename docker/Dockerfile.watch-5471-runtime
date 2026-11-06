@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Runtime-only cache extension, never part of the product merge.
+# Inherited source 5883853234af4e5b6f6e9bbe79266f1ac2f6ee77 and protected
+# comparison 21027c9e963e3170dadc61faf075d274787fb0f4 have identical dependencies.
+# Native input Git blobs (sha1):
+# pyproject.toml 4432400529e663b539e22fdf264ff8b74a5ccfb7
+# uv.lock dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1
+# .python-version 0cf960df58f3c12fadffb149e0ee06bb63111f41
+# scripts/ci/setup_dev.sh 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da
+# nemo_gym/cli/env.py 9f6695956c86aacab4d0a08b958cdbbc4bd91f19
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:ee615c4fa2dcba83076935b2bd8536d7f2ce0bc28ff7a7bad2e238cc681714a6
+
+# Keep the inherited framework stack, caches and source. Only populate runtime
+# caches using the same locked extras and native server installer as CI.
+USER 65532:65532
+ENV HOME=/home/nemo-runtime
+WORKDIR /opt/nemo-gym
+RUN <<"SH" bash -eux -o pipefail
+umask 0022
+test "$(id -u)" = 65532
+for path in "$HOME" /opt/nemo-gym /opt/nemo-gym/cache/uv /opt/nemo-gym/cache/xdg /opt/nemo-gym/cache/pre-commit; do
+    test -w "$path"
+done
+seed_root="$(mktemp -d)"
+export UV_CACHE_DIR=/opt/nemo-gym/cache/uv
+UV_PROJECT_ENVIRONMENT="$seed_root/core" uv sync --locked --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb
+for shard in 1 5 6; do
+    ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+        +num_shards=8 "+shard_index=$shard" \
+        "+uv_cache_dir=$UV_CACHE_DIR" "+uv_venv_dir=$seed_root/servers"
+done
+# Prove fresh offline core resolution and real imports; no test assertion,
+# dependency setup, native selector or project source is changed.
+UV_OFFLINE=1 UV_PROJECT_ENVIRONMENT="$seed_root/core-offline" uv sync --locked --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb
+"$seed_root/core-offline/bin/python" -c 'import mlflow, wandb, ray, nemo_lens, nemo_gym; from importlib.metadata import version; assert version("wandb") == "0.30.0"; print("offline-core-imports-ok")'
+for shard in 1 5 6; do
+    UV_OFFLINE=1 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+        +num_shards=8 "+shard_index=$shard" \
+        "+uv_cache_dir=$UV_CACHE_DIR" "+uv_venv_dir=$seed_root/servers-offline"
+done
+rm -rf "$seed_root"
+SH
+# Preserve the public base image's default execution identity and entrypoint.
+USER root
