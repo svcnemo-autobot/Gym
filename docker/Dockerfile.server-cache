@@ -7,6 +7,9 @@
 # .python-version and nemo_gym/cli/env.py setup_only installer unchanged.
 FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:002570aa079073804098f23f25e4b736e65a902b919b10848c182980c7ac5ce8
 WORKDIR /opt/nemo-gym
+# The prebuilt image prefetched vllm_model as root. Regenerate its disposable
+# setuptools metadata as the test user rather than reusing root-owned files.
+RUN rm -rf /opt/nemo-gym/responses_api_models/vllm_model.egg-info
 USER 65532:65532
 RUN set -eu; \
     export HOME=/home/nemo-runtime XDG_CACHE_HOME=/opt/nemo-gym/cache/xdg; \
