@@ -1,0 +1,68 @@
+# syntax=docker/dockerfile:1.19
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:002570aa079073804098f23f25e4b736e65a902b919b10848c182980c7ac5ce8
+
+# Runtime-only extension of the successful main image; keep this out of the product PR.
+# Native source inputs at bfb4698986757fe067274d21289df5dcadc26f01:
+# scripts/ci/install_test_dependencies.sh: 693089cca8fd75a9d52f935fd0d23ee3c039e49f
+# scripts/ci/setup_dev.sh: 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da
+# nemo_gym/cli/env.py: a29b93b067b94ddca202555e8b65278a0213ffee
+# nemo_gym/orchestration/server_venv.py: 7e92e7f39d9ba6175d0393a4371bee10ce90938f
+# resources_servers/interactive_browser/uv.lock: 53eefefa8525cbf33f67b80a1754326dc80add5b
+USER root
+COPY --chown=65532:65532 . /opt/nemo-gym
+WORKDIR /opt/nemo-gym
+ENV HOME=/home/nemo-runtime
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/nemo-runtime/.cache/ms-playwright
+
+# Use the native CI installer's package list and Ubuntu's signed resolver, without sudo.
+RUN <<'EOF' bash -eu -o pipefail
+mapfile -t packages < <(python - <<'PY'
+from pathlib import Path
+import re
+import shlex
+source = Path('scripts/ci/install_test_dependencies.sh').read_text()
+match = re.search(r'^packages=\(\n(.*?)^\)', source, re.M | re.S)
+assert match, 'Native CI package list not found'
+print('\n'.join(shlex.split(match.group(1))))
+PY
+)
+test "${#packages[@]}" -gt 0
+apt-get update
+apt-get --simulate install --no-install-recommends "${packages[@]}"
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+mkdir -p /opt/nemo-gym/cache/server-test-runtime
+dpkg-query -W > /opt/nemo-gym/cache/server-test-runtime/os-packages.tsv
+rm -rf /var/lib/apt/lists/*
+EOF
+
+# Populate the persistent cache using each component's unchanged lock and setup command.
+RUN <<'EOF' bash -eu -o pipefail
+export UV_OFFLINE=0
+uv pip install --no-deps -e /opt/nemo-gym
+seed_root=$(mktemp -d)
+ng_test_all +setup_only=true +delete_venvs_after_each_test=true "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_root}"
+rm -rf "${seed_root}"
+# The pinned Playwright wheel does not contain Chromium; its real tests launch a browser.
+uv run --project resources_servers/interactive_browser --locked python -m playwright install chromium
+chown -R 65532:65532 /opt/nemo-gym/cache /home/nemo-runtime resources_servers/interactive_browser/.venv
+EOF
+
+USER 65532:65532
+RUN <<'EOF' bash -eu -o pipefail
+export UV_OFFLINE=1
+for command in cmake gcc g++ make ffmpeg uv python pre-commit; do command -v "$command"; done
+for path in "$HOME" "$UV_CACHE_DIR" "$PRE_COMMIT_HOME" /opt/nemo-gym /opt/nemo-gym/results; do test -w "$path"; done
+python -c 'import nemo_gym, hydra, pydantic, pytest; print(nemo_gym.__file__)'
+uv run --offline --project resources_servers/interactive_browser --locked python - <<'PY'
+from playwright.sync_api import sync_playwright
+with sync_playwright() as playwright:
+    browser = playwright.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.set_content('<title>Gym offline probe</title>')
+    assert page.title() == 'Gym offline probe'
+    browser.close()
+PY
+EOF
+USER root
