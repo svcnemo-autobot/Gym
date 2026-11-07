@@ -5,20 +5,34 @@ FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:002570aa07907380409
 
 # Runtime-only extension of the successful main image; keep this out of the product PR.
 # Native source inputs at bfb4698986757fe067274d21289df5dcadc26f01:
-# Complete native setup/lock manifest SHA256: 85cbaf38d997e1ae6488c8fbe132a911c849ea6d468edc68af52181c93839814
+# Complete native setup/lock manifest SHA256: eda22e448805e0db2bcf6b4c74c09213fcf1a295c7c316129beb626ab57bfc35
 # scripts/ci/install_test_dependencies.sh: 693089cca8fd75a9d52f935fd0d23ee3c039e49f
 # scripts/ci/setup_dev.sh: 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da
 # nemo_gym/cli/env.py: a29b93b067b94ddca202555e8b65278a0213ffee
 # nemo_gym/orchestration/server_venv.py: 7e92e7f39d9ba6175d0393a4371bee10ce90938f
 # resources_servers/interactive_browser/uv.lock: 53eefefa8525cbf33f67b80a1754326dc80add5b
 USER root
-COPY --chown=65532:65532 . /opt/nemo-gym
+COPY --chown=65532:65532 --exclude=docker/Dockerfile.server-tests . /opt/nemo-gym
 WORKDIR /opt/nemo-gym
 ENV HOME=/home/nemo-runtime
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/nemo-runtime/.cache/ms-playwright
 ENV TIKTOKEN_CACHE_DIR=/home/nemo-runtime/.cache/tiktoken
 ENV ARNIEFILE=/opt/nemo-gym/cache/server-test-runtime/eternafold/arniefile.txt
 ENV PATH="/opt/nemo-gym/responses_api_agents/codex_agent/.codex_node/bin:/opt/nemo-gym/resources_servers/mimo_music/.abcmidi/bin:${PATH}"
+
+# Fail cheap path assumptions before populating hundreds of component environments.
+RUN <<'EOF' bash -eu -o pipefail
+python - <<'PY_DRIVER'
+import json, os, sys
+from pathlib import Path
+assert Path(sys.prefix) == Path('/opt/nemo_gym_venv'), (sys.executable, sys.prefix)
+assert os.environ['UV_PROJECT_ENVIRONMENT'] == '/opt/nemo_gym_venv'
+assert Path(os.environ['UV_CACHE_DIR']).is_dir()
+print(json.dumps({'driver': sys.executable, 'prefix': sys.prefix,
+                  'UV_PROJECT_ENVIRONMENT': os.environ['UV_PROJECT_ENVIRONMENT'],
+                  'UV_CACHE_DIR': os.environ['UV_CACHE_DIR']}), flush=True)
+PY_DRIVER
+EOF
 
 # Use the native CI installer's package list and Ubuntu's signed resolver, without sudo.
 RUN <<'EOF' bash -eu -o pipefail
@@ -48,21 +62,43 @@ dpkg-query -W > /opt/nemo-gym/cache/server-test-runtime/os-packages.tsv
 rm -rf /var/lib/apt/lists/*
 EOF
 
-# Populate the persistent cache using each component's unchanged lock and setup command.
+# Check one component's actual prefix before the expensive seeding layer.
 RUN <<'EOF' bash -eu -o pipefail
 export UV_OFFLINE=0
-# MolOpt has a separate native Python3.11 lock, not covered by server discovery.
-uv python install 3.11
 uv pip install --no-deps -e /opt/nemo-gym
+python - <<'PY_CHEAP_COMPONENT'
+import os, subprocess, sys
+from pathlib import Path
+sys.argv = ['runtime-path-preflight', '+uv_venv_dir=/opt/nemo-gym/cache/asset-envs', f'+uv_cache_dir={os.environ["UV_CACHE_DIR"]}']
+from nemo_gym.cli.env import TestConfig, _setup_single
+from nemo_gym.config.global_config import get_global_config_dict
+from nemo_gym.orchestration.server_venv import get_venv_path
+config = get_global_config_dict()
+component = TestConfig(entrypoint='resources_servers/interactive_browser')
+assert _setup_single(component, config).wait() == 0
+venv = get_venv_path(component.resolved_dir_path, config)
+subprocess.run([str(venv / 'bin/python'), '-c',
+    'import sys; from pathlib import Path; assert Path(sys.prefix) == Path(sys.argv[1]); import playwright; print(sys.executable, sys.prefix)', str(venv)], check=True)
+PY_CHEAP_COMPONENT
+EOF
+
+# Cache this expensive success separately from lazy assets and their probes.
+RUN <<'EOF' bash -eu -o pipefail
+export UV_OFFLINE=0
+uv python install 3.11
 seed_root=$(mktemp -d)
 ng_test_all +setup_only=true +delete_venvs_after_each_test=true "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_root}"
 rm -rf "${seed_root}"
-# The pinned Playwright wheel does not contain Chromium; its real tests launch a browser.
-# Never inherit the root UV_PROJECT_ENVIRONMENT for a component sync.
-# Use Gym's setup path and the resolved component interpreter instead.
+chown -R 65532:65532 /opt/nemo-gym/cache
+EOF
+
+# Bind actual component interpreters; never synchronize the inherited root environment.
+RUN <<'EOF' bash -eu -o pipefail
+export UV_OFFLINE=0
 python - <<'PY_ENVIRONMENTS'
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 sys.argv = ['runtime-asset-setup', '+uv_venv_dir=/opt/nemo-gym/cache/asset-envs', f'+uv_cache_dir={os.environ["UV_CACHE_DIR"]}']
@@ -71,7 +107,7 @@ from nemo_gym.config.global_config import get_global_config_dict
 from nemo_gym.orchestration.server_venv import get_venv_path
 config = get_global_config_dict()
 components = [
- 'resources_servers/arena', 'resources_servers/genrm_eval',
+ 'resources_servers/arena', 'resources_servers/genrm_eval', 'resources_servers/long_transduction',
  'resources_servers/instruction_following', 'resources_servers/ifbench',
  'resources_servers/voicebench', 'resources_servers/iheval', 'resources_servers/rolemrc',
  'resources_servers/chemcotbench', 'resources_servers/ether0',
@@ -79,7 +115,7 @@ components = [
  'resources_servers/rna_design', 'responses_api_agents/rna_design_agent',
  'resources_servers/mimo_music', 'responses_api_agents/codex_agent',
  'responses_api_agents/miniswe_sandboxed_agent', 'responses_api_models/switchyard_model',
- 'resources_servers/gdpval',
+ 'resources_servers/gdpval', 'environment_servers/swe_together',
 ]
 interpreters = {}
 failed = []
@@ -88,7 +124,16 @@ for entrypoint in components:
     if _setup_single(component, config).wait() != 0:
         failed.append(entrypoint)
     else:
-        interpreters[entrypoint] = str(get_venv_path(component.resolved_dir_path, config) / 'bin/python')
+        venv = get_venv_path(component.resolved_dir_path, config)
+        interpreter = venv / 'bin/python'
+        subprocess.run([str(interpreter), '-c',
+            'import sys; from pathlib import Path; assert Path(sys.prefix) == Path(sys.argv[1]); print(sys.executable, sys.prefix)', str(venv)], check=True)
+        interpreters[entrypoint] = str(interpreter)
+# The generator's extra package is pinned by its native benchmark lock.
+import tomllib
+lock = tomllib.loads(Path('benchmarks/long_transduction/uv.lock').read_text())
+version = next(package['version'] for package in lock['package'] if package['name'] == 'wonderwords')
+subprocess.run(['uv', 'pip', 'install', '--python', interpreters['resources_servers/long_transduction'], '--no-deps', f'wonderwords=={version}'], check=True)
 Path('cache/server-test-runtime/interpreters.json').write_text(json.dumps(interpreters, indent=2))
 assert not failed, failed
 PY_ENVIRONMENTS
@@ -129,7 +174,7 @@ def run(name, component, code, cwd=ROOT, timeout=1200):
     results.append(result)
 
 results = []
-for component in ('resources_servers/arena', 'resources_servers/genrm_eval'):
+for component in ('resources_servers/arena', 'resources_servers/genrm_eval', 'resources_servers/long_transduction'):
     run('tokenizers-' + component.rsplit('/', 1)[1], component, r"""
 import inspect
 import tiktoken
@@ -137,6 +182,12 @@ import tiktoken.load
 assert 'TIKTOKEN_CACHE_DIR' in inspect.getsource(tiktoken.load.read_file_cached)
 for encoding in (tiktoken.encoding_for_model('gpt-4o'), tiktoken.get_encoding('cl100k_base')):
     assert encoding.decode(encoding.encode('Gym offline consumer')) == 'Gym offline consumer'
+""")
+
+run('long-transduction-vocabulary', 'resources_servers/long_transduction', r"""
+from benchmarks.long_transduction.prepare import _load_word_lists
+adjectives, nouns = _load_word_lists()
+assert adjectives and nouns
 """)
 
 run('indicifeval', 'resources_servers/instruction_following', r"""
@@ -202,7 +253,16 @@ import os, subprocess
 from resources_servers.chemcotbench.setup_upstream import ensure_repository, ensure_data, REPO_REVISION
 repo = ensure_repository(None)
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip() == REPO_REVISION
-assert (ensure_data(None) / 'manifest.json').is_file()
+data = ensure_data(None)
+assert (data / 'manifest.json').is_file()
+import json, sys
+sys.path.insert(0, str(repo))
+os.environ['CHEMCOT_DATA_DIR'] = str(data)
+from resources_servers.chemcotbench.app import ChemCoTBenchVerifyRequest
+from resources_servers.chemcotbench.worker import score_record
+case = json.loads(open('resources_servers/chemcotbench/tests/verifier_cases.jsonl').readline())
+body = ChemCoTBenchVerifyRequest.model_validate(case['request'])
+assert score_record(body.verifier_metadata.model_dump(), body.response.output_text, True)['reward'] == case['expected_reward']
 from resources_servers.chemcotbench.setup_molopt import ensure_molopt_runtime, ORACLE_CHECK
 python, cache = ensure_molopt_runtime()
 subprocess.run([str(python), '-c', ORACLE_CHECK], cwd=cache, check=True)
@@ -213,7 +273,8 @@ ensure_ether0()
 from ether0.model_prompts import extract_answer_loose
 from ether0.models import RewardFunctionInfo
 from ether0.rewards import EVAL_FUNCTIONS
-assert EVAL_FUNCTIONS
+info = RewardFunctionInfo.model_validate('str_eval!:!FCC(=O)O!:!property-regression-ld50')
+assert EVAL_FUNCTIONS[info.fxn_name]('FCC(=O)O', info.answer_info) == 1.0
 """)
 run('newtonbench', 'resources_servers/newton_bench', r"""
 import math
@@ -276,6 +337,9 @@ with TemporaryDirectory() as directory:
     (sessions / 'rollout.jsonl').write_text('{"id":"probe"}\n')
     subprocess.run(['node', str(launcher), '--snapshot', str(root)], check=True, timeout=15)
     assert (root / 'native_session.jsonl').read_text().strip() == '{"id":"probe"}'
+extension = Path('responses_api_agents/pi_agent/runtime-guards.mjs').resolve()
+script = "import assert from 'node:assert/strict';\nconst {default: install} = await import(process.argv[1]);\nconst handlers = {};\nprocess.env.NEMO_GYM_PI_BASH_TIMEOUT = '900';\ninstall({on: (name, handler) => {handlers[name] = handler;}});\nconst event = {toolName: 'bash', input: {command: 'echo hello', timeout: 30}};\nhandlers.tool_call(event);\nassert.equal(event.input.timeout, 30);\nassert.ok(handlers.before_agent_start({systemPrompt: 'Probe'}).systemPrompt.includes('900 seconds'));\n"
+subprocess.run(['node', '--input-type=module', '-e', script, extension.as_uri()], check=True, timeout=15)
 """)
 run('miniswe-fresh-runtime', 'responses_api_agents/miniswe_sandboxed_agent', r"""
 import os, subprocess, sys
@@ -288,6 +352,69 @@ with TemporaryDirectory() as directory:
     python = runtime / 'bin/python'
     subprocess.run(['uv', '--no-config', 'pip', 'install', '--python', str(python), '-r', str(requirements)], check=True)
     subprocess.run([str(python), '-c', 'from minisweagent.run.mini import app; from minisweagent.environments.local import LocalEnvironment; from minisweagent.exceptions import Submitted; import litellm, mcp'], env=os.environ | {'LITELLM_LOCAL_MODEL_COST_MAP': 'true'}, check=True)
+    # Run the native adapter once against a loopback Responses endpoint.
+    import json, threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    requests = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            assert self.path.endswith('/v1/responses'), self.path
+            params = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            requests.append(params)
+            payload = {'id': 'resp_runtime', 'created_at': 0, 'object': 'response',
+                'model': 'runtime-probe', 'status': 'completed', 'parallel_tool_calls': False,
+                'tool_choice': 'auto', 'tools': [], 'output': [{'type': 'function_call',
+                    'id': 'fc_runtime', 'call_id': 'call_runtime', 'name': 'bash',
+                    'arguments': json.dumps({'command': 'echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT'}),
+                    'status': 'completed'}],
+                'usage': {'input_tokens': 10, 'input_tokens_details': {'cached_tokens': 0},
+                    'output_tokens': 3, 'output_tokens_details': {'reasoning_tokens': 0}, 'total_tokens': 13}}
+            data = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        config = Path(directory) / 'config.yaml'
+        config.write_text(json.dumps({
+            'run': {'task': 'Return the completed runtime probe.'},
+            'agent': {'agent_class': 'default', 'step_limit': 2, 'cost_limit': 0},
+            'environment': {'environment_class': 'timed_environment.TimedLocalEnvironment',
+                'cwd': directory, 'timeout': 10},
+            'model': {'model_class': 'litellm_response', 'model_name': 'openai/runtime-probe',
+                'cost_tracking': 'ignore_errors', 'model_kwargs': {
+                    'api_base': f'http://127.0.0.1:{server.server_port}/v1', 'api_key': 'runtime-probe',
+                    'max_retries': 0, 'timeout': 10, 'extra_headers': {'x-session-id': 'runtime-probe'},
+                    'extra_body': {'tools': [{'type': 'function', 'name': 'bash',
+                        'description': 'Run a local shell command.', 'strict': False,
+                        'parameters': {'type': 'object', 'properties': {'command': {'type': 'string'}},
+                            'required': ['command']}}]}}}}))
+        trajectory = Path(directory) / 'trajectory.json'
+        environment = os.environ | {'MSWEA_CONFIGURED': 'true', 'MSWEA_SILENT_STARTUP': 'true',
+            'LITELLM_LOCAL_MODEL_COST_MAP': 'true', 'MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT': '1',
+            'MSWEA_GLOBAL_CONFIG_DIR': str(Path(directory) / 'config')}
+        log = ROOT / 'cache/server-test-runtime' / ('miniswe-' + os.environ['UV_OFFLINE'] + '.log')
+        with log.open('w') as output:
+            completed = subprocess.run([str(python),
+                str(ROOT / 'responses_api_agents/miniswe_sandboxed_agent/timed_environment.py'),
+                '-c', 'mini.yaml', '-c', str(config), '-o', str(trajectory)],
+                cwd=directory, env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=90)
+        if completed.returncode:
+            print(log.read_text()[-8000:])
+        assert completed.returncode == 0, completed.returncode
+        assert requests and trajectory.is_file()
+        assert 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT' in trajectory.read_text()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(10)
+
 """)
 run('chromium', 'resources_servers/interactive_browser', r"""
 from playwright.sync_api import sync_playwright
@@ -302,8 +429,83 @@ import subprocess, sys
 subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], check=True)
 """)
 run('libreoffice-real-conversion', 'resources_servers/gdpval', r"""
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from docx import Document
+from resources_servers.gdpval import preconvert
 from resources_servers.gdpval.setup_libreoffice import ensure_libreoffice
 assert ensure_libreoffice()
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    deliverables = root / 'deliverables'
+    deliverables.mkdir()
+    document = Document()
+    document.add_paragraph('Runtime dependency probe.')
+    document.save(deliverables / 'report.docx')
+    assert ensure_libreoffice(probe_dirs=[root / 'persist'])
+    assert preconvert.preconvert_dir(deliverables) == (1, 0, [])
+    assert (deliverables / 'report.pdf').read_bytes().startswith(b'%PDF')
+""")
+run('native-system-lifecycles', 'environment_servers/swe_together', r"""
+import socket, ssl, subprocess, threading, urllib.request
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from environment_servers.swe_together.egress_proxy import RegistryCA
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    source = root / 'probe.c'
+    source.write_text('int main(void) { return 0; }\n')
+    binary = root / 'probe'
+    subprocess.run(['cc', str(source), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+    tmux = ['tmux', '-S', str(root / 'tmux.sock')]
+    try:
+        subprocess.run([*tmux, 'new-session', '-d', '-s', 'probe', 'sleep 30'], check=True)
+        subprocess.run([*tmux, 'has-session', '-t', 'probe'], check=True)
+    finally:
+        subprocess.run([*tmux, 'kill-server'], check=True)
+    ca = RegistryCA(root / 'certificates')
+    assert ca.certificate.is_file() and ca.contexts
+    host, server_context = next(iter(ca.contexts.items()))
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    def serve():
+        conn, _ = listener.accept()
+        with server_context.wrap_socket(conn, server_side=True) as stream:
+            assert stream.recv(4) == b'ping'
+            stream.sendall(b'pong')
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        context = ssl.create_default_context(cafile=str(ca.certificate))
+        with socket.create_connection(listener.getsockname(), timeout=10) as conn:
+            with context.wrap_socket(conn, server_hostname=host) as stream:
+                stream.sendall(b'ping')
+                assert stream.recv(4) == b'pong'
+        thread.join(10)
+        assert not thread.is_alive()
+    finally:
+        listener.close()
+""")
+run('switchyard-native-server', 'responses_api_models/switchyard_model', r"""
+import os, socket, urllib.request
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from switchyard_rust.server import Server
+os.environ['SWITCHYARD_TEST_API_KEY'] = 'runtime-probe'
+with TemporaryDirectory() as directory:
+    deployment = Path(directory) / 'routes.toml'
+    deployment.write_text('schema_version = 1\n[llm_clients.upstream]\nformat = "openai_chat"\nbase_url = "http://127.0.0.1:9/v1"\napi_key_env = "SWITCHYARD_TEST_API_KEY"\n[targets.policy]\nid = "upstream/model"\nllm_client = "upstream"\n[routes.policy-model]\nid = "policy-model"\ntype = "passthrough"\ntarget = "policy"\n')
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        port = sock.getsockname()[1]
+    server = Server(str(deployment), port=port)
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=10) as response:
+            assert response.status == 200
+    finally:
+        server.close()
 """)
 # Retain actual revisions for native unpinned external clones; never claim they were pinned.
 if not offline:
