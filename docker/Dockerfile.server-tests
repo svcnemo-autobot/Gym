@@ -168,10 +168,17 @@ def run(name, component, code, cwd=ROOT, timeout=1200):
         result = {'group': name, 'mode': mode, 'status': 'passed'}
     except Exception as error:
         traceback.print_exc()
-        result = {'group': name, 'mode': mode, 'status': 'failed', 'error': str(error)}
+        deferred = (name == 'tmux-runtime-capability'
+                    and os.environ.get('GYM_PROBE_IMAGE_BUILD') == '1'
+                    and isinstance(error, subprocess.CalledProcessError) and error.returncode == 78)
+        result = {'group': name, 'mode': mode,
+                  'status': 'deferred_runtime' if deferred else 'failed',
+                  'error_type': type(error).__name__,
+                  'returncode': getattr(error, 'returncode', None)}
     with (STATE / f'{mode}.jsonl').open('a') as stream:
         stream.write(json.dumps(result) + '\n')
     results.append(result)
+    print(json.dumps(result), flush=True)
 
 results = []
 for component in ('resources_servers/arena', 'resources_servers/genrm_eval', 'resources_servers/long_transduction'):
@@ -345,7 +352,8 @@ run('miniswe-fresh-runtime', 'responses_api_agents/miniswe_sandboxed_agent', r""
 import os, subprocess, sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-requirements = Path('responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt').resolve()
+ROOT = Path.cwd()
+requirements = ROOT / 'responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt'
 with TemporaryDirectory() as directory:
     runtime = Path(directory) / 'venv'
     subprocess.run(['uv', '--no-config', 'venv', str(runtime), '--python', sys.executable], check=True)
@@ -446,6 +454,27 @@ with TemporaryDirectory() as directory:
     assert preconvert.preconvert_dir(deliverables) == (1, 0, [])
     assert (deliverables / 'report.pdf').read_bytes().startswith(b'%PDF')
 """)
+# Build sandbox failure is not a test skip or pass: defer only the evidenced PTY/fork refusal.
+# The runtime probe must run without GYM_PROBE_IMAGE_BUILD and must pass before shards.
+run('tmux-runtime-capability', 'environment_servers/swe_together', r"""
+import os, subprocess, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+with TemporaryDirectory() as directory:
+    tmux = ['tmux', '-S', str(Path(directory) / 'tmux.sock')]
+    result = subprocess.run([*tmux, 'new-session', '-d', '-s', 'probe', 'sleep 30'],
+                            capture_output=True, text=True)
+    if result.returncode:
+        print(result.stdout, result.stderr, flush=True)
+        if (os.environ.get('GYM_PROBE_IMAGE_BUILD') == '1'
+                and 'fork failed: Permission denied' in result.stderr):
+            sys.exit(78)
+        result.check_returncode()
+    try:
+        subprocess.run([*tmux, 'has-session', '-t', 'probe'], check=True)
+    finally:
+        subprocess.run([*tmux, 'kill-server'], check=True)
+""")
 run('native-system-lifecycles', 'environment_servers/swe_together', r"""
 import socket, ssl, subprocess, threading, urllib.request
 from pathlib import Path
@@ -458,12 +487,6 @@ with TemporaryDirectory() as directory:
     binary = root / 'probe'
     subprocess.run(['cc', str(source), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
-    tmux = ['tmux', '-S', str(root / 'tmux.sock')]
-    try:
-        subprocess.run([*tmux, 'new-session', '-d', '-s', 'probe', 'sleep 30'], check=True)
-        subprocess.run([*tmux, 'has-session', '-t', 'probe'], check=True)
-    finally:
-        subprocess.run([*tmux, 'kill-server'], check=True)
     ca = RegistryCA(root / 'certificates')
     assert ca.certificate.is_file() and ca.contexts
     host, server_context = next(iter(ca.contexts.items()))
@@ -514,15 +537,17 @@ if not offline:
         if (path / '.git').exists():
             revisions[str(path)] = subprocess.check_output(['git', '-C', str(path), 'rev-parse', 'HEAD'], text=True).strip()
     (STATE / 'native-resolved-revisions.json').write_text(json.dumps(revisions, indent=2))
-assert all(row['status'] == 'passed' for row in results), [row for row in results if row['status'] != 'passed']
-print(mode, 'native asset groups passed:', len(results), flush=True)
+allowed = {'passed', 'deferred_runtime'} if os.environ.get('GYM_PROBE_IMAGE_BUILD') == '1' else {'passed'}
+assert all(row['status'] in allowed for row in results), [row for row in results if row['status'] not in allowed]
+print(mode, 'native asset group dispositions:', {status: sum(row['status'] == status for row in results)
+      for status in sorted(allowed)}, flush=True)
 PY_ASSETS
 chown 65532:65532 /opt/nemo-gym/cache/server-test-runtime/native-assets.py
 EOF
 
 USER 65532:65532
-RUN python -u /opt/nemo-gym/cache/server-test-runtime/native-assets.py prepare
-RUN python -u /opt/nemo-gym/cache/server-test-runtime/native-assets.py offline
+RUN GYM_PROBE_IMAGE_BUILD=1 python -u /opt/nemo-gym/cache/server-test-runtime/native-assets.py prepare
+RUN GYM_PROBE_IMAGE_BUILD=1 python -u /opt/nemo-gym/cache/server-test-runtime/native-assets.py offline
 RUN <<'EOF' bash -eu -o pipefail
 for command in cmake gcc g++ make ffmpeg uv python pre-commit node tmux openssl; do command -v "$command"; done
 for path in "$HOME" "$UV_CACHE_DIR" "$PRE_COMMIT_HOME" /opt/nemo-gym /opt/nemo-gym/results; do test -w "$path"; done
