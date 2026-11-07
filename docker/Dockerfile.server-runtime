@@ -1,0 +1,109 @@
+# syntax=docker/dockerfile:1
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Runtime-only extension; excluded from the success.md PR.
+# Source: NVIDIA-NeMo/Gym@69a514999667cebee03d8fd8bd0aec996a54a504.
+# Native installer blob: 693089cca8fd75a9d52f935fd0d23ee3c039e49f.
+# Native input-tree SHA256: 367947e8312c5270b8abe3e739bbe59d76257f6bdbaef4ab2697a71041c40416.
+# Additional inputs: scripts/ci/install_test_dependencies.sh; each named module's
+# setup/config/tests, pyproject.toml, uv.lock and runtime/requirements.txt.
+# Blob identities are retained in the Session's runtime-repair-inputs.json ledger.
+# Input blob 693089cca8fd75a9d52f935fd0d23ee3c039e49f scripts/ci/install_test_dependencies.sh
+# Input blob a29b93b067b94ddca202555e8b65278a0213ffee nemo_gym/cli/env.py
+# Input blob 7e92e7f39d9ba6175d0393a4371bee10ce90938f nemo_gym/orchestration/server_venv.py
+# Input blob 79b0d5e9081fbfe75332833e94e24e8cd4b207c1 responses_api_agents/pi_agent/setup_pi.py
+# Input blob 74c8338711fc55d74934a2eb0a0dcf8a68488336 responses_api_agents/pi_agent/configs/pi_agent.yaml
+# Input blob 10da2e65d3de15291ab5bbd5803cb3badf533a35 responses_api_agents/codex_agent/setup_codex.py
+# Input blob 071458b1e00eaecee04d5c9203d247f1d8dd5906 responses_api_agents/rna_design_agent/prepare.py
+# Input blob e884bd1becf39353b6dea1a450de1741b709471a resources_servers/chemcotbench/setup_molopt.py
+# Input blob 8c8992a42d1a0f72aad5bc04b670e963505ce65c resources_servers/chemcotbench/setup_upstream.py
+# Input blob 8ccfbd6fa181eff62ecb3d611192db2af713027e resources_servers/chemcotbench/molopt/pyproject.toml
+# Input blob 83a0aa7408acfb053886d1d527a1d06ae9d508ec resources_servers/chemcotbench/molopt/uv.lock
+# Input blob 1f231ac7c39c415345813b6700b463ae10faf09c resources_servers/instruction_following/setup_indicifeval.py
+# Input blob c7c86728d5a92784da1dff913d2d5a08d1996108 resources_servers/instruction_following/indicifeval_schema.py
+# Input blob 33182244750d63342467f03469400dafe1857e10 resources_servers/interactive_browser/browser/_chromium.py
+# Input blob f716c5084ab6e72c6c18f82686b7a398c6bd0ae2 resources_servers/interactive_browser/pyproject.toml
+# Input blob 53eefefa8525cbf33f67b80a1754326dc80add5b resources_servers/interactive_browser/uv.lock
+# Input blob 31efc0af7ffabce2beaf7aeec81ca8102e27a884 responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
+# Input blob 0b2060c4025db72dc92998d90f513e769c030887 resources_servers/wmt_translation/uv.lock
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:3b951a90a09456bd50c90c956f10bf96ca103efe810af6bfe51f0a90c7aadf0b
+WORKDIR /opt/nemo-gym
+USER root
+RUN <<'SYSTEM' bash -euxo pipefail
+# Resolve the native CI package list from this exact checkout, without changing
+# package versions or installing a different framework stack. Docker is CLI-only.
+eval "$(sed -n '/^packages=(/,/^)/p' scripts/ci/install_test_dependencies.sh)"
+apt-get update
+apt-get --simulate install --no-install-recommends "${packages[@]}" docker.io
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" docker.io
+dpkg-query -W "${packages[@]}" docker.io
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+SYSTEM
+ENV TIKTOKEN_CACHE_DIR=/opt/nemo-gym/cache/tiktoken
+ENV npm_config_prefix=/home/nemo-runtime/.local
+USER 65532:65532
+RUN <<'PREPARE' bash -euxo pipefail
+export HOME=/home/nemo-runtime XDG_CACHE_HOME=/opt/nemo-gym/cache/xdg
+export UV_OFFLINE=0 HF_HUB_OFFLINE=0
+mkdir -p "$TIKTOKEN_CACHE_DIR" "$HOME/.local/bin"
+test -w "$HOME"; test -w "$UV_CACHE_DIR"; test -w "$TIKTOKEN_CACHE_DIR"
+# Fresh native server environments, only to prepare their real lazy consumers.
+python -u - <<'PY'
+from nemo_gym.cli.env import TestConfig, _setup_single
+from nemo_gym.config.global_config import get_global_config_dict
+config = get_global_config_dict()
+for entrypoint in ('resources_servers/moldetox', 'resources_servers/interactive_browser', 'resources_servers/rna_design', 'resources_servers/chemcotbench', 'resources_servers/instruction_following', 'resources_servers/wmt_translation'):
+    print('PREPARE_NATIVE_ENV', entrypoint, flush=True)
+    status = _setup_single(TestConfig(entrypoint=entrypoint), config).wait()
+    if status:
+        raise SystemExit(status)
+PY
+# Tokenizer downloads are verified by the hashes in the installed tiktoken package.
+python -c 'import tiktoken; [tiktoken.get_encoding(n).encode("offline readiness") for n in ("cl100k_base", "o200k_base")]'
+resources_servers/moldetox/.venv/bin/python -c 'from rdkit.Chem.Draw import rdMolDraw2D; print("RDKIT_DRAW_IMPORT_OK")'
+(cd resources_servers/interactive_browser && .venv/bin/python -c 'from browser._chromium import ensure_chromium; ensure_chromium()')
+resources_servers/rna_design/.venv/bin/python -c 'from responses_api_agents.rna_design_agent.prepare import ensure_suites; ensure_suites()'
+resources_servers/instruction_following/.venv/bin/python -c 'from resources_servers.instruction_following.setup_indicifeval import load_harness; load_harness()'
+resources_servers/wmt_translation/.venv/bin/python -c 'from sacrebleu.metrics import BLEU; print(BLEU(tokenize="flores200").corpus_score(["offline probe"], [["offline probe"]]))'
+# These are the native pinned source, data, Python-3.11 runtime and oracle installers.
+resources_servers/chemcotbench/.venv/bin/python -c 'from resources_servers.chemcotbench.setup_upstream import ensure_repository, ensure_data; from resources_servers.chemcotbench.setup_molopt import ensure_molopt_runtime; print(ensure_repository(None)); print(ensure_data(None)); print(ensure_molopt_runtime())'
+# The fixture deliberately creates its own isolated MCP-v2 environment.
+uv --no-config venv /tmp/miniswe-native-seed --python 3.13.14
+uv --no-config pip install --python /tmp/miniswe-native-seed/bin/python -r responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
+UV_OFFLINE=1 /tmp/miniswe-native-seed/bin/python -c 'import minisweagent, litellm, mcp; print("MINISWE_RUNTIME_IMPORT_OK")'
+rm -rf /tmp/miniswe-native-seed
+# Reuse the native Node version and installer, then expose the real executable.
+python -c 'from responses_api_agents.codex_agent.setup_codex import ensure_node; ensure_node()'
+# Make source-relative generated inputs exportable to the materialized candidate.
+tar -czf /opt/nemo-gym/cache/server-source-fixtures.tar.gz \
+    responses_api_agents/rna_design_agent/suites \
+    resources_servers/instruction_following/.indicifeval_trans
+rm -rf resources_servers/moldetox/.venv resources_servers/interactive_browser/.venv \
+    resources_servers/rna_design/.venv resources_servers/chemcotbench/.venv \
+    resources_servers/instruction_following/.venv resources_servers/wmt_translation/.venv
+PREPARE
+ENV PATH=/home/nemo-runtime/.local/bin:/opt/nemo-gym/responses_api_agents/codex_agent/.codex_node/bin:/opt/nemo_gym_venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN <<'NODE' bash -euxo pipefail
+export HOME=/home/nemo-runtime
+node --version
+npm --version
+# Exact version from the selected native pi_agent config; never use latest.
+python -c 'from responses_api_agents.pi_agent.setup_pi import ensure_pi; ensure_pi("0.80.2")'
+NODE
+# Fresh offline processes probe the persisted cache rather than in-process state.
+RUN <<'OFFLINE' bash -euxo pipefail
+export HOME=/home/nemo-runtime UV_OFFLINE=1 HF_HUB_OFFLINE=1
+python -c 'import ctypes; ctypes.CDLL("libXrender.so.1"); print("XRENDER_LOAD_OK")'
+python -c 'import tiktoken.load; tiktoken.load.read_file = lambda *_: (_ for _ in ()).throw(RuntimeError("network forbidden")); import tiktoken; [print(n, tiktoken.get_encoding(n).encode("offline readiness")) for n in ("cl100k_base", "o200k_base")]'
+uv --no-config venv /tmp/miniswe-native-offline --python 3.13.14
+uv --offline --no-config pip install --python /tmp/miniswe-native-offline/bin/python -r responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
+/tmp/miniswe-native-offline/bin/python -c 'import minisweagent, litellm, mcp; print("MINISWE_OFFLINE_OK")'
+rm -rf /tmp/miniswe-native-offline
+tar -tzf /opt/nemo-gym/cache/server-source-fixtures.tar.gz > /tmp/source-fixtures.list
+test -s /tmp/source-fixtures.list
+node --version
+pi --version
+docker --version
+OFFLINE
+USER root
