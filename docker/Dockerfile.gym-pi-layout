@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Temporary validation runtime only. Never include in the success.md PR.
+# native-input responses_api_agents/pi_agent/tests/test_outcome.py 7a8c9157416e810cf6b82db04b8859afae030af7
+# native-input responses_api_agents/pi_agent/tests/test_sandbox.py 3e0861cd0ed99939cbd027c417cc0b684d1e8e10
+# native-input responses_api_agents/pi_agent/configs/pi_agent.yaml 74c8338711fc55d74934a2eb0a0dcf8a68488336
+# native-input responses_api_agents/pi_agent/install_pi_runtime.sh 3f081cd6435fe4991ae13e7075890aac02323de1
+# native-input responses_api_agents/pi_agent/pyproject.toml 3a9e4a42c7fd6bdd41380238f52fae2a1f686f9f
+# native-input responses_api_agents/pi_agent/uv.lock 278ae06314ee2065010ae109739b55075c597626
+# native-input nemo_gym/cli/_locked_env.py b2551aa32b818f7e13ac3c38a8e43515964c5836
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:35a41744c5d7e614d4dc318522b0ed06a03454bbc5c54a715e2de7c3efa55d7a
+USER root
+WORKDIR /opt/nemo-gym
+RUN <<'PY' /opt/nemo_gym_venv/bin/python
+import hashlib, json, pathlib, shutil, subprocess, urllib.request
+prefix = pathlib.Path('/opt/gym-runtime/pi')
+archive = pathlib.Path('/tmp/pi-coding-agent-0.80.2.tgz')
+url = 'https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.80.2.tgz'
+with urllib.request.urlopen(url, timeout=120) as response:
+    archive.write_bytes(response.read())
+assert hashlib.sha256(archive.read_bytes()).hexdigest() == '9cab186615345f3cc2ab1d35f7d6f139306a3122a030a45f7c245489f7349085'
+# Standard npm nesting matches the installed-package layout used by native Pi tests.
+# Resolver overrides retain the release cohort already pinned by the published shrinkwrap.
+shutil.rmtree(prefix)
+prefix.mkdir()
+(prefix / 'package.json').write_text(json.dumps({
+    'private': True,
+    'overrides': {f'@earendil-works/{name}': '0.80.2' for name in ['pi-agent-core', 'pi-ai', 'pi-tui']},
+}))
+subprocess.run(['npm', 'install', '--prefix', str(prefix), '--install-strategy=nested',
+                '--ignore-scripts', '--no-audit', '--no-fund', str(archive)], check=True)
+archive.unlink()
+with (prefix / 'installed-tree.json').open('w') as output:
+    subprocess.run(['npm', 'ls', '--prefix', str(prefix), '--all', '--json'], stdout=output, check=True)
+subprocess.run(['chown', '-R', '65532:65532', str(prefix)], check=True)
+# Seed the unchanged module environment with its native locked installer.
+subprocess.run(['/opt/nemo_gym_venv/bin/python', 'nemo_gym/cli/_locked_env.py',
+                '--project', '/opt/nemo-gym/responses_api_agents/pi_agent',
+                '--venv', '/opt/gym-runtime/envs/pi_agent', '--python', '3.13.14'], check=True)
+subprocess.run(['chown', '-R', '65532:65532', '/opt/gym-runtime/envs/pi_agent'], check=True)
+subprocess.run(['find', '/opt/nemo-gym/cache/uv', '!', '-user', '65532', '-exec', 'chown', '65532:65532', '{}', '+'], check=True)
+PY
+USER 65532:65532
+RUN --network=none <<'PY' /opt/nemo_gym_venv/bin/python
+import hashlib, json, os, pathlib, subprocess, xml.etree.ElementTree as ET
+assert os.getuid() == 65532 and os.environ['HOME'] == '/home/nemo-runtime'
+for root in ['/home/nemo-runtime', '/opt/nemo-gym/cache/uv', '/opt/nemo-gym/cache/xdg', '/opt/nemo-gym/results']:
+    p = pathlib.Path(root) / '.pi-layout-write-probe'
+    p.write_text('probe')
+    p.unlink()
+package = pathlib.Path('/opt/gym-runtime/pi/node_modules/@earendil-works/pi-coding-agent')
+sdk = package / 'node_modules/@earendil-works/pi-ai'
+assert json.loads((package / 'package.json').read_text())['version'] == '0.80.2'
+assert json.loads((sdk / 'package.json').read_text())['version'] == '0.80.2'
+subprocess.run(['pi', '--version'], check=True)
+subprocess.run(['node', '--input-type=module', '-e',
+    "const a=await import(process.argv[1]);const b=await import(process.argv[2]);if(typeof a.streamSimple!=='function'||typeof b.isContextOverflow!=='function')throw new Error('native SDK imports missing');",
+    (sdk / 'dist/api/openai-completions.js').as_uri(), (sdk / 'dist/utils/overflow.js').as_uri()], check=True)
+subprocess.run(['/opt/gym-runtime/envs/pi_agent/bin/python', '-m', 'pytest',
+    'tests/test_outcome.py', '-k', 'test_pinned_pi_classifies_model_server_http_error',
+    '-q', '--junitxml=/tmp/pi-layout-native.xml'],
+    cwd='/opt/nemo-gym/responses_api_agents/pi_agent', check=True)
+report = ET.parse('/tmp/pi-layout-native.xml').getroot()
+cases = list(report.iter('testcase'))
+assert len(cases) == 10
+assert not any(case.find(kind) is not None for case in cases for kind in ['failure', 'error', 'skipped']), ET.tostring(report)
+pathlib.Path('/opt/gym-runtime/pi-layout-probe.json').write_text(json.dumps({
+    'native_contract_cases': len(cases), 'failed': 0, 'skipped': 0,
+    'source_test_sha256': hashlib.sha256(pathlib.Path('/opt/nemo-gym/responses_api_agents/pi_agent/tests/test_outcome.py').read_bytes()).hexdigest(),
+    'scope': 'Offline image readiness probe; managed shard remains required.',
+}))
+print('PI_NESTED_LAYOUT_AND_TEN_NATIVE_CONTRACT_CASES_PASSED', flush=True)
+PY
+# Preserve the canonical default user; repository workloads select UID/GID 65532.
+USER root
