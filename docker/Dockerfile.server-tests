@@ -5,6 +5,7 @@ FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:002570aa07907380409
 
 # Runtime-only extension of the successful main image; keep this out of the product PR.
 # Native source inputs at bfb4698986757fe067274d21289df5dcadc26f01:
+# Complete native setup/lock manifest SHA256: 85cbaf38d997e1ae6488c8fbe132a911c849ea6d468edc68af52181c93839814
 # scripts/ci/install_test_dependencies.sh: 693089cca8fd75a9d52f935fd0d23ee3c039e49f
 # scripts/ci/setup_dev.sh: 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da
 # nemo_gym/cli/env.py: a29b93b067b94ddca202555e8b65278a0213ffee
@@ -15,17 +16,27 @@ COPY --chown=65532:65532 . /opt/nemo-gym
 WORKDIR /opt/nemo-gym
 ENV HOME=/home/nemo-runtime
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/nemo-runtime/.cache/ms-playwright
+ENV TIKTOKEN_CACHE_DIR=/home/nemo-runtime/.cache/tiktoken
+ENV ARNIEFILE=/opt/nemo-gym/cache/server-test-runtime/eternafold/arniefile.txt
+ENV PATH="/opt/nemo-gym/responses_api_agents/codex_agent/.codex_node/bin:/opt/nemo-gym/resources_servers/mimo_music/.abcmidi/bin:${PATH}"
 
 # Use the native CI installer's package list and Ubuntu's signed resolver, without sudo.
 RUN <<'EOF' bash -eu -o pipefail
 mapfile -t packages < <(python - <<'PY'
 from pathlib import Path
+import ast
 import re
 import shlex
 source = Path('scripts/ci/install_test_dependencies.sh').read_text()
 match = re.search(r'^packages=\(\n(.*?)^\)', source, re.M | re.S)
 assert match, 'Native CI package list not found'
-print('\n'.join(shlex.split(match.group(1))))
+packages = shlex.split(match.group(1))
+tree = ast.parse(Path('resources_servers/gdpval/setup_libreoffice.py').read_text())
+for node in tree.body:
+    if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == '_APT_PACKAGES' for t in node.targets):
+        packages.extend(ast.literal_eval(node.value))
+packages.extend(['tmux'])  # Real terminus_2_sandboxed_agent/tests/test_terminal.py sessions.
+print('\n'.join(dict.fromkeys(packages)))
 PY
 )
 test "${#packages[@]}" -gt 0
@@ -40,22 +51,245 @@ EOF
 # Populate the persistent cache using each component's unchanged lock and setup command.
 RUN <<'EOF' bash -eu -o pipefail
 export UV_OFFLINE=0
+# MolOpt has a separate native Python3.11 lock, not covered by server discovery.
+uv python install 3.11
 uv pip install --no-deps -e /opt/nemo-gym
 seed_root=$(mktemp -d)
 ng_test_all +setup_only=true +delete_venvs_after_each_test=true "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_root}"
 rm -rf "${seed_root}"
 # The pinned Playwright wheel does not contain Chromium; its real tests launch a browser.
-uv run --project resources_servers/interactive_browser --locked python -m playwright install chromium
-chown -R 65532:65532 /opt/nemo-gym/cache /home/nemo-runtime resources_servers/interactive_browser/.venv
+# Never inherit the root UV_PROJECT_ENVIRONMENT for a component sync.
+# Use Gym's setup path and the resolved component interpreter instead.
+python - <<'PY_ENVIRONMENTS'
+import json
+import os
+import sys
+from pathlib import Path
+sys.argv = ['runtime-asset-setup', '+uv_venv_dir=/opt/nemo-gym/cache/asset-envs', f'+uv_cache_dir={os.environ["UV_CACHE_DIR"]}']
+from nemo_gym.cli.env import TestConfig, _setup_single
+from nemo_gym.config.global_config import get_global_config_dict
+from nemo_gym.orchestration.server_venv import get_venv_path
+config = get_global_config_dict()
+components = [
+ 'resources_servers/arena', 'resources_servers/genrm_eval',
+ 'resources_servers/instruction_following', 'resources_servers/ifbench',
+ 'resources_servers/voicebench', 'resources_servers/iheval', 'resources_servers/rolemrc',
+ 'resources_servers/chemcotbench', 'resources_servers/ether0',
+ 'resources_servers/interactive_browser', 'resources_servers/newton_bench',
+ 'resources_servers/rna_design', 'responses_api_agents/rna_design_agent',
+ 'resources_servers/mimo_music', 'responses_api_agents/codex_agent',
+ 'responses_api_agents/miniswe_sandboxed_agent', 'responses_api_models/switchyard_model',
+ 'resources_servers/gdpval',
+]
+interpreters = {}
+failed = []
+for entrypoint in components:
+    component = TestConfig(entrypoint=entrypoint)
+    if _setup_single(component, config).wait() != 0:
+        failed.append(entrypoint)
+    else:
+        interpreters[entrypoint] = str(get_venv_path(component.resolved_dir_path, config) / 'bin/python')
+Path('cache/server-test-runtime/interpreters.json').write_text(json.dumps(interpreters, indent=2))
+assert not failed, failed
+PY_ENVIRONMENTS
+chown -R 65532:65532 /opt/nemo-gym/cache /home/nemo-runtime
 EOF
 
-USER 65532:65532
+# Only native helper calls and dependency probes; no pytest or test rewriting.
 RUN <<'EOF' bash -eu -o pipefail
-export UV_OFFLINE=1
-for command in cmake gcc g++ make ffmpeg uv python pre-commit; do command -v "$command"; done
-for path in "$HOME" "$UV_CACHE_DIR" "$PRE_COMMIT_HOME" /opt/nemo-gym /opt/nemo-gym/results; do test -w "$path"; done
-python -c 'import nemo_gym, hydra, pydantic, pytest; print(nemo_gym.__file__)'
-uv run --offline --project resources_servers/interactive_browser --locked python - <<'PY'
+cat > /opt/nemo-gym/cache/server-test-runtime/native-assets.py <<'PY_ASSETS'
+import json
+import os
+import subprocess
+import sys
+import traceback
+from pathlib import Path
+ROOT = Path('/opt/nemo-gym')
+STATE = ROOT / 'cache/server-test-runtime'
+interpreters = json.loads((STATE / 'interpreters.json').read_text())
+mode = sys.argv[1]
+offline = mode == 'offline'
+os.environ['UV_OFFLINE'] = '1' if offline else '0'
+os.environ['HF_HUB_OFFLINE'] = '1' if offline else '0'
+# The offline process has no usable external route; local subprocess/lifecycle probes still work.
+if offline:
+    for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'):
+        os.environ[key] = 'http://127.0.0.1:9'
+    os.environ['NO_PROXY'] = os.environ['no_proxy'] = '127.0.0.1,localhost'
+
+def run(name, component, code, cwd=ROOT, timeout=1200):
+    try:
+        subprocess.run([interpreters[component], '-u', '-c', code], cwd=cwd, check=True, timeout=timeout)
+        result = {'group': name, 'mode': mode, 'status': 'passed'}
+    except Exception as error:
+        traceback.print_exc()
+        result = {'group': name, 'mode': mode, 'status': 'failed', 'error': str(error)}
+    with (STATE / f'{mode}.jsonl').open('a') as stream:
+        stream.write(json.dumps(result) + '\n')
+    results.append(result)
+
+results = []
+for component in ('resources_servers/arena', 'resources_servers/genrm_eval'):
+    run('tokenizers-' + component.rsplit('/', 1)[1], component, r"""
+import inspect
+import tiktoken
+import tiktoken.load
+assert 'TIKTOKEN_CACHE_DIR' in inspect.getsource(tiktoken.load.read_file_cached)
+for encoding in (tiktoken.encoding_for_model('gpt-4o'), tiktoken.get_encoding('cl100k_base')):
+    assert encoding.decode(encoding.encode('Gym offline consumer')) == 'Gym offline consumer'
+""")
+
+run('indicifeval', 'resources_servers/instruction_following', r"""
+from resources_servers.instruction_following.setup_indicifeval import load_harness, LANGUAGES
+from resources_servers.instruction_following.indicifeval import IndicIFEvalMetadata, score_response
+load_harness()
+for language in LANGUAGES:
+    metadata = IndicIFEvalMetadata(language=language, prompt='Use a title and no comma.', instruction_id_list=['detectable_format:title', 'punctuation:no_comma'], kwargs=[{}, {}])
+    assert score_response(metadata, '<<शीर्षक>>\nउत्तर').inst_level_strict_acc == [True, True]
+""")
+
+# Run NLTK's downloader only during preparation, into a private runtime-owned default root.
+if not offline:
+    run('nltk-prepare', 'resources_servers/ifbench', r"""
+import defusedxml.ElementTree
+import regex
+import nltk
+from pathlib import Path
+root = Path.home() / 'nltk_data'
+root.mkdir(mode=0o700, exist_ok=True)
+for name in ('punkt', 'punkt_tab', 'stopwords', 'averaged_perceptron_tagger_eng', 'wordnet', 'omw-1.4'):
+    assert nltk.download(name, download_dir=str(root), quiet=True, raise_on_error=True)
+# Native RoleMRC resolves directory names, not zip-backed lookup aliases.
+import zipfile
+for name in ('wordnet', 'omw-1.4'):
+    archive = root / 'corpora' / (name + '.zip')
+    if archive.is_file():
+        with zipfile.ZipFile(archive) as stream:
+            stream.extractall(root / 'corpora')
+""")
+for component in ('resources_servers/ifbench', 'resources_servers/instruction_following', 'resources_servers/voicebench', 'resources_servers/iheval', 'resources_servers/rolemrc'):
+    run('nltk-' + component.rsplit('/', 1)[1], component, r"""
+import defusedxml.ElementTree
+import regex
+import nltk
+assert nltk.sent_tokenize('One. Two.')
+assert nltk.word_tokenize('The cat sat.')
+from nltk.corpus import wordnet, stopwords
+assert wordnet.synsets('castle')
+assert 'the' in stopwords.words('english')
+assert nltk.pos_tag(['Write', 'a', 'story'])
+""")
+run('ifbench', 'resources_servers/ifbench', r"""
+from resources_servers.ifbench.setup_ifbench import ensure_ifbench
+ensure_ifbench()
+import instructions_registry, instructions_util, spacy
+assert 'words:start_verb' in instructions_registry.INSTRUCTION_DICT
+assert instructions_util.count_stopwords('the cat and the dog') == 3
+assert spacy.load('en_core_web_sm')('A small probe.')
+""")
+run('rolemrc-meteor', 'resources_servers/rolemrc', r"""
+from resources_servers.rolemrc.app import _ensure_nltk_data, _compute_meteor
+_ensure_nltk_data()
+assert _compute_meteor('the cat sat', 'the cat sat') > 0
+""")
+run('voicebench-native-ensure', 'resources_servers/voicebench', r"""
+from resources_servers.voicebench.app import _ensure_nltk
+_ensure_nltk(None)
+""")
+
+run('chemcot-evaluator-data', 'resources_servers/chemcotbench', r"""
+import os, subprocess
+from resources_servers.chemcotbench.setup_upstream import ensure_repository, ensure_data, REPO_REVISION
+repo = ensure_repository(None)
+assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip() == REPO_REVISION
+assert (ensure_data(None) / 'manifest.json').is_file()
+from resources_servers.chemcotbench.setup_molopt import ensure_molopt_runtime, ORACLE_CHECK
+python, cache = ensure_molopt_runtime()
+subprocess.run([str(python), '-c', ORACLE_CHECK], cwd=cache, check=True)
+""", timeout=1800)
+run('ether0', 'resources_servers/ether0', r"""
+from resources_servers.ether0.setup_ether0 import ensure_ether0
+ensure_ether0()
+from ether0.model_prompts import extract_answer_loose
+from ether0.models import RewardFunctionInfo
+from ether0.rewards import EVAL_FUNCTIONS
+assert EVAL_FUNCTIONS
+""")
+run('newtonbench', 'resources_servers/newton_bench', r"""
+import math
+from resources_servers.newton_bench.setup_newton_bench import ensure_newton_bench
+ensure_newton_bench()
+from resources_servers.newton_bench.app import _load_module
+core = _load_module('m0_gravity')['core']
+value = core.run_experiment_for_module(mass1=10.0, mass2=20.0, distance=5.0, difficulty='easy', system='vanilla_equation', noise_level=0.0, law_version='v0')
+assert math.isfinite(float(value))
+""")
+
+if not offline:
+    run('eternafold-prepare', 'responses_api_agents/rna_design_agent', r"""
+import os
+from pathlib import Path
+from responses_api_agents.rna_design_agent.setup_eternafold import ensure_eternafold
+path = Path(os.environ['ARNIEFILE'])
+assert ensure_eternafold(path.parent) == path
+""", timeout=1800)
+for component in ('resources_servers/rna_design', 'responses_api_agents/rna_design_agent'):
+    run('rna-' + component.split('/')[0], component, r"""
+import math
+import sys
+from pathlib import Path
+# Same import path as both native conftests, not an import replacement.
+sys.path.insert(0, str(Path('responses_api_agents/rna_design_agent').resolve()))
+from prepare import ensure_suites, SUITES_DIR, build_rows
+from setup_eternafold import ensure_eternafold
+ensure_eternafold()
+ensure_suites()
+suites = sorted(SUITES_DIR.glob('rnainvbench_*.yaml'))
+assert len(suites) == 8
+assert all(build_rows(p.stem, limit=1) for p in suites)
+from rds.targets import from_dict, register
+from rds.tools.fold import FoldMatchIn, score_fold_match
+register(from_dict({'name': 'runtime-probe', 'length': 12, 'target_structure': '((((....))))'}))
+out = score_fold_match(FoldMatchIn(sequences=['GGGGAAAACCCC'], target='runtime-probe'))
+assert out['best_f1'] == 1.0
+assert math.isfinite(out['results'][0]['dg'])
+""")
+run('abcmidi', 'resources_servers/mimo_music', r"""
+import os
+from resources_servers.mimo_music.setup_abc2midi import ensure_abc2midi
+os.environ['ABC2MIDI_BIN'] = ensure_abc2midi()
+from resources_servers.mimo_music.score_worker import score_abc
+out = score_abc('X:1\nT:Smoke melody\nM:4/4\nL:1/8\nQ:1/4=100\nK:C\nC2 E2 G2 E2 | F2 A2 G4 | E2 D2 C2 D2 | E4 C4 |')
+assert 0 < out['reward'] < 1 and out['scorer_details']['reject'] == 0
+""")
+run('node-codex-launcher', 'responses_api_agents/codex_agent', r"""
+import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from responses_api_agents.codex_agent.setup_codex import ensure_node
+ensure_node()
+launcher = Path('responses_api_agents/codex_agent/sandbox_launcher.mjs').resolve()
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    sessions = root / 'home/.codex/sessions'
+    sessions.mkdir(parents=True)
+    (sessions / 'rollout.jsonl').write_text('{"id":"probe"}\n')
+    subprocess.run(['node', str(launcher), '--snapshot', str(root)], check=True, timeout=15)
+    assert (root / 'native_session.jsonl').read_text().strip() == '{"id":"probe"}'
+""")
+run('miniswe-fresh-runtime', 'responses_api_agents/miniswe_sandboxed_agent', r"""
+import os, subprocess, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+requirements = Path('responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt').resolve()
+with TemporaryDirectory() as directory:
+    runtime = Path(directory) / 'venv'
+    subprocess.run(['uv', '--no-config', 'venv', str(runtime), '--python', sys.executable], check=True)
+    python = runtime / 'bin/python'
+    subprocess.run(['uv', '--no-config', 'pip', 'install', '--python', str(python), '-r', str(requirements)], check=True)
+    subprocess.run([str(python), '-c', 'from minisweagent.run.mini import app; from minisweagent.environments.local import LocalEnvironment; from minisweagent.exceptions import Submitted; import litellm, mcp'], env=os.environ | {'LITELLM_LOCAL_MODEL_COST_MAP': 'true'}, check=True)
+""")
+run('chromium', 'resources_servers/interactive_browser', r"""
 from playwright.sync_api import sync_playwright
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(headless=True)
@@ -63,6 +297,33 @@ with sync_playwright() as playwright:
     page.set_content('<title>Gym offline probe</title>')
     assert page.title() == 'Gym offline probe'
     browser.close()
-PY
+""" if offline else r"""
+import subprocess, sys
+subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], check=True)
+""")
+run('libreoffice-real-conversion', 'resources_servers/gdpval', r"""
+from resources_servers.gdpval.setup_libreoffice import ensure_libreoffice
+assert ensure_libreoffice()
+""")
+# Retain actual revisions for native unpinned external clones; never claim they were pinned.
+if not offline:
+    revisions = {}
+    for path in (ROOT / 'NewtonBench', ROOT / 'resources_servers/ether0/.ether0', STATE / 'eternafold/EternaFold'):
+        if (path / '.git').exists():
+            revisions[str(path)] = subprocess.check_output(['git', '-C', str(path), 'rev-parse', 'HEAD'], text=True).strip()
+    (STATE / 'native-resolved-revisions.json').write_text(json.dumps(revisions, indent=2))
+assert all(row['status'] == 'passed' for row in results), [row for row in results if row['status'] != 'passed']
+print(mode, 'native asset groups passed:', len(results), flush=True)
+PY_ASSETS
+chown 65532:65532 /opt/nemo-gym/cache/server-test-runtime/native-assets.py
+EOF
+
+USER 65532:65532
+RUN python -u /opt/nemo-gym/cache/server-test-runtime/native-assets.py prepare
+RUN python -u /opt/nemo-gym/cache/server-test-runtime/native-assets.py offline
+RUN <<'EOF' bash -eu -o pipefail
+for command in cmake gcc g++ make ffmpeg uv python pre-commit node tmux openssl; do command -v "$command"; done
+for path in "$HOME" "$UV_CACHE_DIR" "$PRE_COMMIT_HOME" /opt/nemo-gym /opt/nemo-gym/results; do test -w "$path"; done
+python -c 'import nemo_gym, hydra, pydantic, pytest; print(nemo_gym.__file__)'
 EOF
 USER root
