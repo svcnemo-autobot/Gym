@@ -1,0 +1,127 @@
+# syntax=docker/dockerfile:1
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Validation-only CPU prerequisites; never part of the success.md product PR.
+# native-input nemo_gym/cli/_locked_env.py b2551aa32b818f7e13ac3c38a8e43515964c5836
+# native-input nemo_gym/environment/benchmark_preparation.py 61d04150e226886a11709df25c0f83e1886c847b
+# native-input benchmarks/long_transduction/pyproject.toml 047045f7a560569319db560fab838dc1398c14b5
+# native-input benchmarks/long_transduction/uv.lock ff002c590fb72b4e571394caba29d1dd7580b756
+# native-input benchmarks/long_transduction/prepare.py df540282c4680f6898982f2ba4d02292bcff5f24
+# native-input resources_servers/long_transduction/tests/test_prepare.py 7cc0e920dc4648e293bcdf4c12ee1361829dc616
+# native-input resources_servers/gdpval/setup_libreoffice.py 4375f457585b0f3ef45744153c6f02fe2edf22dc
+# native-input resources_servers/gdpval/tests/test_libreoffice_command.py f3ab30bdca86972a8301481d8935325a57b01c95
+# native-input resources_servers/gdpval/preconvert.py efe9bfa3d4d198fbb560d9dcebd0b4aa663a7987
+# native-input responses_api_agents/terminus_2_sandboxed_agent/tests/test_terminal.py 422d10b94c7e6095703548291ea10c48f32f2da7
+# native-input responses_api_agents/kilocode_agent/tests/test_bootstrap.py 88ca2b2d4dfe46ad25c51f9821a972d3f683b17f
+# native-input responses_api_agents/kilocode_agent/sandbox.py ccb0d6c5b9721306cd91065a2058af8fb147424c
+# native-input resources_servers/vibench/prepare.py 86a620503e117a4a21254e2e5426614b48dbdb47
+# native-input resources_servers/vibench/tests/test_prepare.py d964beb5852550c815f3583f29f3565cb8ee81b0
+# native-input resources_servers/gdp_pdf/pyproject.toml 52f5651041ff9946027a5be51cee1f4f61270689
+# native-input resources_servers/gdp_pdf/uv.lock dacb2d3c1e1da2a40cf0f804c4722fc65b5f065e
+# native-input benchmarks/gdp_pdf/prepare.py c39076c3f32d2cba85bed722d3e53bf9d0014616
+# native-input benchmarks/terminal_bench_2_1/prepare_inkling_small.py b38f446a4d0e7ff511d504cd0bb59a1dd1c6b7f1
+# native-input benchmarks/terminal_bench_2_1/inkling_small_tasks.json a61e2d111c7899182c57b03c1a922ae3bd744153
+# native-input resources_servers/indian_banking/README.md 7545296855d0ab568d3cbdfc159a37c9f5646e13
+# native-input resources_servers/indian_banking/pyproject.toml 2a8e81ec172f646936a2b6dc833a1526018d0bcf
+# native-input resources_servers/indian_banking/uv.lock 8a119fbbf159b307e433763f4b9be961d88f68bb
+# native-input resources_servers/indian_banking/tests/test_app.py 99598352cd7278ad74dad0ea1825a98667eac94c
+# native-input resources_servers/terminal_bench_2_1/pyproject.toml 189ecedb863912f26fd26668172e4ca7e0ade921
+# native-input resources_servers/terminal_bench_2_1/uv.lock 514b4055ed1348a7834c23f0bab3dfe9e3d34e75
+# native-input resources_servers/terminal_bench_2_1/tests/test_app.py a615872f594cd4f5b116e38fa3e40792a9259595
+# native-input resources_servers/gdp_pdf/README.md c5349ec20aa73038b15e54f96ff7feb34b290f87
+# native-input resources_servers/vibench/README.md 857364f4bb8244e906291fd6a95f51ea785b3844
+# native-input uv.lock dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:a5d6719c2430637c6576f86e7562d20b6b122a85861feb6787d70e13f95b820e
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+USER root
+# Keep the candidate source separate from the base image checkout so newer
+# image-only files cannot become candidate consumers. Caches remain inherited.
+COPY --chown=65532:65532 . /opt/gym-prereq/source/
+WORKDIR /opt/gym-prereq/source
+# CPU bootstrap explicitly requires POSIX sh. The CUDA base's sh-wrap selects
+# Bash without _CUDA_COMPAT_STATUS. Keep that wrapper and Bash intact, use the
+# distro-owned dash for /bin/sh, and do not forge CUDA initialization state.
+RUN test "$(readlink -f /bin/sh)" = /usr/bin/sh-wrap && \
+    test "$(sha256sum /usr/bin/sh-wrap | cut -d' ' -f1)" = d708a4b32d7366e10d22cfe058fec7b3699dd2d22ae40f7bcf432b256fe9d4fe && \
+    test -x /bin/dash && ln -sfn dash /bin/sh && \
+    install -d -o 65532 -g 65532 /opt/gym-prereq /opt/gym-prereq/envs /opt/gym-prereq/reports
+# Refresh signed package indexes before resolving; the release image strips them.
+# The native installer leaves OS versions to this resolver. Save its proposal.
+RUN apt-get update && /opt/nemo_gym_venv/bin/python - <<'PY_OS'
+import subprocess
+from resources_servers.gdpval.setup_libreoffice import _APT_PACKAGES
+packages = [*_APT_PACKAGES, 'tmux']
+with open('/opt/gym-prereq/reports/apt-proposed.txt', 'w') as stream:
+    subprocess.run(['apt-get', '-s', 'install', '--no-install-recommends', *packages], stdout=stream, stderr=subprocess.STDOUT, check=True)
+subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', *packages], check=True)
+with open('/opt/gym-prereq/reports/installed-packages.txt', 'w') as stream:
+    subprocess.run(['dpkg-query', '-W', *packages], stdout=stream, check=True)
+PY_OS
+USER 65532:65532
+RUN <<'PY_ENV' /opt/nemo_gym_venv/bin/python
+import os, pathlib, subprocess, sys
+from nemo_gym.cli._locked_env import sync_environment
+root = pathlib.Path('/opt/gym-prereq/source')
+envs = pathlib.Path('/opt/gym-prereq/envs')
+# Seed the benchmark interpreter through native server setup first so its dev
+# test tools remain present under the native inexact benchmark sync.
+sync_environment(root/'resources_servers/long_transduction', envs/'benchmarks__long_transduction', sys.executable, [], [])
+for component in ['benchmarks/long_transduction', 'resources_servers/gdpval', 'resources_servers/gdp_pdf', 'resources_servers/indian_banking', 'resources_servers/terminal_bench_2_1', 'resources_servers/vibench', 'responses_api_agents/kilocode_agent', 'responses_api_agents/terminus_2_sandboxed_agent']:
+    target = envs / component.replace('/', '__')
+    sync_environment(root / component, target, sys.executable, [], [])
+# ViBench documents Jinja2 in its preparation interpreter; do not alter its lock.
+# Use the root lock's pin only in this explicit preparation environment.
+subprocess.run(['uv', 'pip', 'install', '--python', str(envs/'resources_servers__vibench/bin/python'), 'jinja2==3.1.6'], check=True)
+# Populate the real tokenizer disk cache via the locked preparation interpreter.
+subprocess.run([str(envs/'benchmarks__long_transduction/bin/python'), '-c', 'import tiktoken,wonderwords; assert tiktoken.get_encoding("cl100k_base").encode("Gym readiness")'], check=True)
+PY_ENV
+RUN <<'PY_DATA' /opt/nemo_gym_venv/bin/python
+import os, pathlib, subprocess
+os.environ['HF_HUB_OFFLINE'] = '0'
+os.environ['HF_DATASETS_OFFLINE'] = '0'
+from huggingface_hub import hf_hub_download, HfApi
+root = pathlib.Path('/opt/gym-prereq/source')
+# Native README downloads have no revision argument. Preserve that behavior and
+# record the resolved repository identity rather than inventing a native pin.
+for repo in ['Oitaaa/GDP.pdf', 'NPCI/nemo-gym-indian-banking']:
+    info = HfApi().dataset_info(repo)
+    with open('/opt/gym-prereq/reports/' + repo.replace('/', '__') + '.revision', 'w') as stream:
+        stream.write(info.sha + '\n')
+for name in ['db.json', 'kb.json']:
+    hf_hub_download('NPCI/nemo-gym-indian-banking', name, repo_type='dataset', local_dir=root/'resources_servers/indian_banking/data')
+subprocess.run(['/opt/gym-prereq/envs/resources_servers__gdp_pdf/bin/python', '-c', 'from benchmarks.gdp_pdf.prepare import fetch_example_media, RS_DATA_DIR; print(fetch_example_media(RS_DATA_DIR))'], check=True)
+subprocess.run(['/opt/nemo_gym_venv/bin/python', '-m', 'benchmarks.terminal_bench_2_1.prepare_inkling_small'], check=True)
+PY_DATA
+RUN --network=none <<'PY_OFFLINE' /opt/nemo_gym_venv/bin/python
+import os, pathlib, subprocess, tempfile, json
+assert os.getuid() == 65532 and os.environ['HOME'] == '/home/nemo-runtime'
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+os.environ['UV_OFFLINE'] = '1'
+for directory in ['/opt/gym-prereq/source', '/opt/nemo-gym/cache/pre-commit', '/home/nemo-runtime', '/opt/nemo-gym/cache/uv', '/opt/nemo-gym/cache/xdg', '/opt/nemo-gym/results', '/opt/gym-prereq']:
+    probe = pathlib.Path(directory)/'.prerequisite-write-probe'
+    probe.write_text('ok'); probe.unlink()
+assert pathlib.Path('/bin/sh').resolve() == pathlib.Path('/usr/bin/dash')
+# Original assertions and parameter sets; these are offline readiness probes,
+# not managed full-shard verdicts. Do not add skip markers or rewrite payloads.
+cases = [
+ ('responses_api_agents__kilocode_agent', 'responses_api_agents/kilocode_agent', ['tests/test_bootstrap.py']),
+ ('benchmarks__long_transduction', 'resources_servers/long_transduction', ['tests/test_prepare.py']),
+ ('resources_servers__vibench', 'resources_servers/vibench', ['tests/test_prepare.py::TestPromptRendering']),
+ ('resources_servers__gdpval', 'resources_servers/gdpval', ['tests/test_libreoffice_command.py::test_real_libreoffice_through_wrapper_command']),
+ ('responses_api_agents__terminus_2_sandboxed_agent', 'responses_api_agents/terminus_2_sandboxed_agent', ['tests/test_terminal.py']),
+ ('resources_servers__indian_banking', 'resources_servers/indian_banking', ['tests/test_app.py::TestShippedDataIntegrity::test_gold_replay_and_expect_error_marking']),
+ ('resources_servers__terminal_bench_2_1', 'resources_servers/terminal_bench_2_1', ['tests/test_app.py::test_configured_patches_match_the_pinned_task_scripts']),
+ ('resources_servers__gdp_pdf', 'resources_servers/gdp_pdf', ['tests/test_app.py::TestExampleData::test_referenced_manifests_resolve_once_fetched']),
+]
+for environment, component, selectors in cases:
+    python = '/opt/gym-prereq/envs/' + environment + '/bin/python'
+    subprocess.run([python, '-m', 'pytest', '-q', *selectors, '--junitxml=/opt/gym-prereq/reports/'+environment+'.xml'], cwd='/opt/gym-prereq/source/'+component, env=dict(os.environ, PYTHONPATH='/opt/gym-prereq/source'), check=True)
+# The native LibreOffice startup probe includes a real formula/chart workbook.
+subprocess.run(['/opt/gym-prereq/envs/resources_servers__gdpval/bin/python', '-c', 'from resources_servers.gdpval.setup_libreoffice import ensure_libreoffice; assert ensure_libreoffice()'], check=True)
+# Native pinned task preparation is idempotent and validates its exact checksum.
+subprocess.run(['/opt/nemo_gym_venv/bin/python', '-m', 'benchmarks.terminal_bench_2_1.prepare_inkling_small'], check=True)
+print('NATIVE_PREREQUISITE_OFFLINE_CONSUMERS_PASSED', flush=True)
+PY_OFFLINE
+# Keep the existing canonical default; managed tests still select UID/GID65532.
+USER root
