@@ -1,0 +1,22 @@
+# Runtime-only validation image; excluded from the success.md product PR.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Native dependency inputs: NVIDIA-NeMo/Gym@69a514999667cebee03d8fd8bd0aec996a54a504.
+# Input-tree SHA256: 367947e8312c5270b8abe3e739bbe59d76257f6bdbaef4ab2697a71041c40416
+# Uses that revision's complete server manifests/locks, root manifests/lock,
+# .python-version and nemo_gym/cli/env.py setup_only installer unchanged.
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:002570aa079073804098f23f25e4b736e65a902b919b10848c182980c7ac5ce8
+WORKDIR /opt/nemo-gym
+USER 65532:65532
+RUN set -eu; \
+    export HOME=/home/nemo-runtime XDG_CACHE_HOME=/opt/nemo-gym/cache/xdg; \
+    test -w "$HOME"; test -w "$UV_CACHE_DIR"; \
+    seed_root="$(mktemp -d)"; \
+    UV_OFFLINE=0 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+        "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_root}"; \
+    rm -rf "${seed_root}"; \
+    probe_root="$(mktemp -d)"; \
+    UV_OFFLINE=1 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+        "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${probe_root}"; \
+    rm -rf "${probe_root}"
+USER root
