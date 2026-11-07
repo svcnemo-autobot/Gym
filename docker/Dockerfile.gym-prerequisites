@@ -102,6 +102,11 @@ for directory in ['/opt/gym-prereq/source', '/opt/nemo-gym/cache/pre-commit', '/
     probe = pathlib.Path(directory)/'.prerequisite-write-probe'
     probe.write_text('ok'); probe.unlink()
 assert pathlib.Path('/bin/sh').resolve() == pathlib.Path('/usr/bin/dash')
+# Keep tmux installed and inspect its version here, but PTY-dependent native
+# tests must execute after publication: inner BuildKit denies tmux's PTY fork.
+subprocess.run(['tmux', '-V'], check=True)
+with open('/opt/gym-prereq/reports/deferred-runtime-probes.json', 'w') as stream:
+    json.dump({'reason': 'Inner BuildKit cannot fork tmux PTYs; verify in published image on actual native CPU runtime before accepting shard results.', 'source_path': 'responses_api_agents/terminus_2_sandboxed_agent/tests/test_terminal.py', 'source_git_blob': '422d10b94c7e6095703548291ea10c48f32f2da7', 'deferred_test_ids': ['tests/test_terminal.py::test_exited_shell_recovery_discards_pending_input_and_reports_lost_state[failure]', 'tests/test_terminal.py::test_exited_shell_recovery_discards_pending_input_and_reports_lost_state[interrupt]', 'tests/test_terminal.py::test_ctrl_c_recovers_a_full_pty_input_queue_without_executing_pending_text[160]', 'tests/test_terminal.py::test_ctrl_c_recovers_a_full_pty_input_queue_without_executing_pending_text[16384]'], 'runtime_user': '65532:65532', 'working_directory': '/opt/gym-prereq/source/responses_api_agents/terminus_2_sandboxed_agent', 'command': ['/opt/gym-prereq/envs/responses_api_agents__terminus_2_sandboxed_agent/bin/python', '-m', 'pytest', '-q', 'tests/test_terminal.py', '--junitxml=/mnt/artifacts/terminus-terminal-runtime.xml'], 'required_result': {'passed': 22, 'failed': 0, 'errors': 0, 'skipped': 0}, 'actual_runtime_status': 'pending; build-local completion never discharges this obligation', 'full_native_shard_required': True}, stream, indent=2)
 # Original assertions and parameter sets; these are offline readiness probes,
 # not managed full-shard verdicts. Do not add skip markers or rewrite payloads.
 cases = [
@@ -109,7 +114,7 @@ cases = [
  ('benchmarks__long_transduction', 'resources_servers/long_transduction', ['tests/test_prepare.py']),
  ('resources_servers__vibench', 'resources_servers/vibench', ['tests/test_prepare.py::TestPromptRendering']),
  ('resources_servers__gdpval', 'resources_servers/gdpval', ['tests/test_libreoffice_command.py::test_real_libreoffice_through_wrapper_command']),
- ('responses_api_agents__terminus_2_sandboxed_agent', 'responses_api_agents/terminus_2_sandboxed_agent', ['tests/test_terminal.py']),
+ ('responses_api_agents__terminus_2_sandboxed_agent', 'responses_api_agents/terminus_2_sandboxed_agent', ['tests/test_terminal.py::test_control_keys_do_not_request_a_newline', 'tests/test_terminal.py::test_shell_text_and_unrelated_warnings_are_preserved', 'tests/test_terminal.py::test_identical_buffer_is_not_reported_as_new_output', 'tests/test_terminal.py::test_failed_input_drain_does_not_claim_interrupt_was_delivered', 'tests/test_terminal.py::test_controls_preserve_command_order', 'tests/test_terminal.py::test_missing_session_is_not_normal_completion', 'tests/test_terminal.py::test_shell_exit_during_send_is_distinguished_from_transport_failure']),
  ('resources_servers__indian_banking', 'resources_servers/indian_banking', ['tests/test_app.py::TestShippedDataIntegrity::test_gold_replay_and_expect_error_marking']),
  ('resources_servers__terminal_bench_2_1', 'resources_servers/terminal_bench_2_1', ['tests/test_app.py::test_configured_patches_match_the_pinned_task_scripts']),
  ('resources_servers__gdp_pdf', 'resources_servers/gdp_pdf', ['tests/test_app.py::TestExampleData::test_referenced_manifests_resolve_once_fetched']),
@@ -121,7 +126,7 @@ for environment, component, selectors in cases:
 subprocess.run(['/opt/gym-prereq/envs/resources_servers__gdpval/bin/python', '-c', 'from resources_servers.gdpval.setup_libreoffice import ensure_libreoffice; assert ensure_libreoffice()'], check=True)
 # Native pinned task preparation is idempotent and validates its exact checksum.
 subprocess.run(['/opt/nemo_gym_venv/bin/python', '-m', 'benchmarks.terminal_bench_2_1.prepare_inkling_small'], check=True)
-print('NATIVE_PREREQUISITE_OFFLINE_CONSUMERS_PASSED', flush=True)
+print('BUILD_LOCAL_OFFLINE_CONSUMERS_PASSED; FOUR_NATIVE_PTY_CASES_PENDING_RUNTIME', flush=True)
 PY_OFFLINE
 # Keep the existing canonical default; managed tests still select UID/GID65532.
 USER root
