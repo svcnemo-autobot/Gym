@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Temporary validation-only extension; excluded from the success.md product PR.
+# native-input resources_servers/mimo_music/setup_abc2midi.py 8884ab15dce600b32ddc8f995845c6ee2c8bb689
+# native-input resources_servers/mimo_music/README.md 4fa94082ecede4111046d43e72e0648e52c50027
+# native-input resources_servers/mimo_music/pyproject.toml 0e8320c9e0334338f9d2c22c5ccd61632b9632ae
+# native-input resources_servers/mimo_music/uv.lock 27b96a0a887034b617ec15359b082fc78b8efb73
+# native-input resources_servers/chemcotbench/setup_upstream.py 8c8992a42d1a0f72aad5bc04b670e963505ce65c
+# native-input resources_servers/chemcotbench/verifier_fixture.py 44fb209bb2b75276f3212aa5ab79619833410ee9
+# native-input resources_servers/chemcotbench/README.md 4fb6e9eec3e2b38cb96d37c9bb192a8a3af39f02
+# native-input resources_servers/chemcotbench/pyproject.toml 1962c78265f5a30944cbf03eca4215b06dc3c750
+# native-input resources_servers/chemcotbench/uv.lock 39ea3668eb5380cf4d15797102a1ec5f56fb1c06
+# native-input resources_servers/interactive_browser/browser/_chromium.py 33182244750d63342467f03469400dafe1857e10
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:a48f232a20fa3892d8f0316800000b5650fb615654c099121caf9c0de08c1ce9
+USER root
+WORKDIR /opt/nemo-gym
+RUN install -d -o 65532 -g 65532 /opt/gym-runtime/bin /opt/nemo-gym/cache/huggingface/hub
+ENV HF_HUB_CACHE=/opt/nemo-gym/cache/huggingface/hub
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/nemo-runtime/.cache/ms-playwright
+ENV PATH="/opt/gym-runtime/bin:$PATH"
+USER 65532:65532
+RUN <<'PY' /opt/nemo_gym_venv/bin/python
+import os, pathlib, shutil, subprocess
+assert os.getuid() == 65532
+# The fixture calls ensure_data(None); populate the native pinned hub snapshot.
+chem = '/opt/gym-runtime/envs/chemcotbench/bin/python'
+subprocess.run([chem, '-c', 'from resources_servers.chemcotbench.setup_upstream import ensure_data; print(ensure_data(None))'], env=dict(os.environ, HF_HUB_OFFLINE='0'), check=True)
+# The README requires the real pinned renderer on PATH for offline operation.
+# Its unchanged installer checks the source archive and builds abc2midi 4.88.
+from resources_servers.mimo_music.setup_abc2midi import ensure_abc2midi
+binary = pathlib.Path(ensure_abc2midi())
+shutil.copy2(binary, '/opt/gym-runtime/bin/abc2midi')
+subprocess.run(['/opt/gym-runtime/bin/abc2midi', '-ver'], check=True)
+PY
+RUN --network=none <<'PY' /opt/nemo_gym_venv/bin/python
+import os, pathlib, subprocess
+os.environ['HF_HUB_OFFLINE'] = '1'
+assert os.getuid() == 65532 and os.environ['HOME'] == '/home/nemo-runtime'
+for root in ['/home/nemo-runtime', '/opt/nemo-gym/cache/uv', '/opt/nemo-gym/cache/xdg', '/opt/nemo-gym/results', '/opt/gym-runtime/bin', '/opt/nemo-gym/cache/huggingface/hub']:
+    probe = pathlib.Path(root) / '.readme-runtime-write-probe'
+    probe.write_text('probe')
+    probe.unlink()
+subprocess.run(['/opt/gym-runtime/envs/chemcotbench/bin/python', '-c', 'from resources_servers.chemcotbench.setup_upstream import ensure_data; p=ensure_data(None); assert (p/"manifest.json").is_file(); print(p)'], check=True)
+from resources_servers.mimo_music.setup_abc2midi import ensure_abc2midi
+assert ensure_abc2midi() == '/opt/gym-runtime/bin/abc2midi'
+subprocess.run(['abc2midi', '-ver'], check=True)
+# Exercise the installed renderer, not only its version or presence.
+import tempfile
+with tempfile.TemporaryDirectory() as directory:
+    source = pathlib.Path(directory) / 'probe.abc'
+    output = pathlib.Path(directory) / 'probe.mid'
+    source.write_text('X:1\nT:Offline readiness\nM:4/4\nL:1/8\nK:C\nC2 E2 G2 c2 |\n')
+    subprocess.run(['abc2midi', str(source), '-o', str(output)], check=True)
+    assert output.read_bytes().startswith(b'MThd')
+subprocess.run(['/opt/gym-runtime/envs/interactive_browser/bin/python', '-c', 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True,args=["--no-sandbox"]); page=b.new_page(); page.set_content("<title>Gym offline</title>"); assert page.title()=="Gym offline"; b.close(); p.stop()'], check=True)
+print('README_NATIVE_CACHE_RENDERER_AND_BROWSER_PROBES_PASSED', flush=True)
+PY
+# Preserve the canonical image default; managed tests select UID/GID 65532.
+USER root
