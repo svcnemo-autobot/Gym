@@ -69,9 +69,18 @@ status=0
 UV_OFFLINE=0 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
     +uv_cache_dir=/opt/nemo-gym/cache/uv +uv_venv_dir=/tmp/gym-server-seed \
     2>&1 | tee /opt/nemo-gym/cache/validation-reports/server-seed.log || status=$?
-printf 'NATIVE_SERVER_SEED_EXIT=%s\n' "$status"
-test "$status" = 0
+printf 'NATIVE_SERVER_ONLINE_SEED_EXIT=%s\n' "$status"
 rm -rf /tmp/gym-server-seed
+# An online sync can fail when revalidating an already cached immutable archive.
+# Require every native environment to install from that cache with egress disabled;
+# this is the actual shard prerequisite and cannot hide an uncached dependency.
+offline_status=0
+UV_OFFLINE=1 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+    +uv_cache_dir=/opt/nemo-gym/cache/uv +uv_venv_dir=/tmp/gym-server-offline-seed \
+    2>&1 | tee /opt/nemo-gym/cache/validation-reports/server-offline-seed.log || offline_status=$?
+printf 'NATIVE_SERVER_OFFLINE_SEED_EXIT=%s\n' "$offline_status"
+test "$offline_status" = 0
+rm -rf /tmp/gym-server-offline-seed
 # This test fixture deliberately installs a separate MCP v2 CLI environment.
 UV_OFFLINE=0 uv --no-config venv /tmp/gym-miniswe-seed --python 3.13.14
 UV_OFFLINE=0 uv --no-config pip install --python /tmp/gym-miniswe-seed/bin/python \
@@ -101,10 +110,8 @@ for component in components:
 if failed:
     raise RuntimeError(f'Consumer environment setup failed: {failed}')
 PY
-UV_OFFLINE=0 python -u /tmp/gym-component-probes.py \
-    > /opt/nemo-gym/cache/validation-reports/consumer-environments.log 2>&1 || {
-    tail -n 160 /opt/nemo-gym/cache/validation-reports/consumer-environments.log; exit 1;
-}
+UV_OFFLINE=1 python -u /tmp/gym-component-probes.py \
+    2>&1 | tee /opt/nemo-gym/cache/validation-reports/consumer-environments.log
 rm /tmp/gym-component-probes.py
 SH
 # Native installers retain their versions, hashes, architecture and verification behavior.
