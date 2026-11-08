@@ -39,15 +39,36 @@ ENV UV_CACHE_DIR=/opt/nemo-gym/cache/uv \
 # The base keeps editable source metadata; preserve its native build-owner contract.
 RUN chown root:root /opt/nemo-gym && UV_OFFLINE=0 uv sync --locked --extra dev
 ENV PATH=/opt/gym-validation-driver/bin:/usr/local/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/mpi/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
-# Keep the large, successful package seed independent of lazy asset preparation.
+# Bound uv transport recovery without changing native manifests, pins or setup.
+ENV UV_HTTP_RETRIES=3 UV_HTTP_TIMEOUT=60
+# Run the two previously failed native setups first so their complete diagnostics
+# reach the durable build log instead of being lost behind a last-lines tail.
+RUN <<'SH'
+UV_OFFLINE=0 python -u - <<'PY'
+from nemo_gym.cli.env import TestConfig, _setup_single
+from nemo_gym.config.global_config import get_global_config_dict
+config = get_global_config_dict()
+config.uv_venv_dir = '/tmp/gym-targeted-seed'
+failed = []
+for component in ('resources_servers/instruction_following', 'responses_api_agents/nooa_agent'):
+    print('START previously-failed-native-setup', component, flush=True)
+    status = _setup_single(TestConfig(entrypoint=component), config).wait()
+    print('TARGETED_NATIVE_SETUP_EXIT', component, status, flush=True)
+    if status:
+        failed.append(component)
+if failed:
+    raise RuntimeError(f'Native dependency setup failed: {failed}')
+PY
+rm -rf /tmp/gym-targeted-seed
+SH
+# Keep the large package seed independent of lazy asset preparation.
 RUN <<'SH'
 mkdir -p /opt/nemo-gym/cache/validation-reports
 printf 'START native-server-environment-seed\n'
 status=0
 UV_OFFLINE=0 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
     +uv_cache_dir=/opt/nemo-gym/cache/uv +uv_venv_dir=/tmp/gym-server-seed \
-    > /opt/nemo-gym/cache/validation-reports/server-seed.log 2>&1 || status=$?
-tail -n 180 /opt/nemo-gym/cache/validation-reports/server-seed.log
+    2>&1 | tee /opt/nemo-gym/cache/validation-reports/server-seed.log || status=$?
 printf 'NATIVE_SERVER_SEED_EXIT=%s\n' "$status"
 test "$status" = 0
 rm -rf /tmp/gym-server-seed
