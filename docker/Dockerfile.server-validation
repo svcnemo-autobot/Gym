@@ -1,0 +1,211 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Temporary validation-only dependency extension. Never include this in the success.md PR.
+# Source inputs are the exact tree of 0cc28ac63a9a080c3982af6868ea2d844c3c5e70:
+# resources_servers c7ca90daaea6708b2858c6496d6e0f8d3d0da76f
+# responses_api_agents f02d3bc2f6186b2eeb80a39dd5cc2439072e9cc1
+# responses_api_models 064cbcb358efe80a79ca5f28fd122055a66a168b
+# environment_servers 7f2d4edf5e3e7a6eb052555f35fb78d5821b5975
+# pyproject.toml 4432400529e663b539e22fdf264ff8b74a5ccfb7
+# uv.lock dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:80ff5e0c11c0b06a8292e6886baeafd2170329672c3a53db4abdfa467194e711
+USER root
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+WORKDIR /opt/nemo-gym
+COPY --chown=65532:65532 . /opt/nemo-gym/
+# Preserve the successful CUDA/framework/Enroot bootstrap. Add only the native CI host closure.
+RUN <<'SH'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends \
+    git curl ca-certificates build-essential cmake \
+    libgl1 libglib2.0-0t64 libsm6 libxext6 libxrender1 \
+    libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+    libcups2t64 libdbus-1-3 libdrm2 libxkbcommon0 libx11-6 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+    libpango-1.0-0 libcairo2 libasound2t64 fonts-liberation ffmpeg
+rm -rf /var/lib/apt/lists/*
+dpkg-query -W enroot
+SH
+ENV UV_CACHE_DIR=/opt/nemo-gym/cache/uv \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/gym-validation-driver \
+    XDG_CACHE_HOME=/opt/nemo-gym/cache/xdg \
+    HF_HOME=/opt/nemo-gym/cache/huggingface \
+    NLTK_DATA=/opt/nemo-gym/cache/xdg/nltk_data \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/nemo-gym/cache/ms-playwright \
+    HOME=/home/nemo-runtime
+# The base keeps editable source metadata; preserve its native build-owner contract.
+RUN chown root:root /opt/nemo-gym && UV_OFFLINE=0 uv sync --locked --extra dev
+ENV PATH=/opt/gym-validation-driver/bin:/usr/local/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/mpi/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+# Keep the large, successful package seed independent of lazy asset preparation.
+RUN <<'SH'
+mkdir -p /opt/nemo-gym/cache/validation-reports
+printf 'START native-server-environment-seed\n'
+status=0
+UV_OFFLINE=0 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+    +uv_cache_dir=/opt/nemo-gym/cache/uv +uv_venv_dir=/tmp/gym-server-seed \
+    > /opt/nemo-gym/cache/validation-reports/server-seed.log 2>&1 || status=$?
+tail -n 180 /opt/nemo-gym/cache/validation-reports/server-seed.log
+printf 'NATIVE_SERVER_SEED_EXIT=%s\n' "$status"
+test "$status" = 0
+rm -rf /tmp/gym-server-seed
+# This test fixture deliberately installs a separate MCP v2 CLI environment.
+UV_OFFLINE=0 uv --no-config venv /tmp/gym-miniswe-seed --python 3.13.14
+UV_OFFLINE=0 uv --no-config pip install --python /tmp/gym-miniswe-seed/bin/python \
+    -r responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
+rm -rf /tmp/gym-miniswe-seed
+SH
+# Use the same native component environment constructor as test execution, with no tests.
+RUN <<'SH'
+cat > /tmp/gym-component-probes.py <<'PY'
+from nemo_gym.cli.env import TestConfig, _setup_single
+from nemo_gym.config.global_config import get_global_config_dict
+config = get_global_config_dict()
+config.uv_venv_dir = '/opt/nemo-gym/cache/consumer-venvs'
+components = (
+    'resources_servers/ifbench', 'resources_servers/newton_bench', 'resources_servers/ether0',
+    'responses_api_agents/rna_design_agent', 'resources_servers/chemcotbench',
+    'resources_servers/interactive_browser', 'resources_servers/mimo_music',
+    'responses_api_agents/codex_agent',
+)
+failed = []
+for component in components:
+    print('START consumer-environment', component, flush=True)
+    status = _setup_single(TestConfig(entrypoint=component), config).wait()
+    print('CONSUMER_ENV_EXIT', component, status, flush=True)
+    if status:
+        failed.append(component)
+if failed:
+    raise RuntimeError(f'Consumer environment setup failed: {failed}')
+PY
+UV_OFFLINE=0 python -u /tmp/gym-component-probes.py \
+    > /opt/nemo-gym/cache/validation-reports/consumer-environments.log 2>&1 || {
+    tail -n 160 /opt/nemo-gym/cache/validation-reports/consumer-environments.log; exit 1;
+}
+rm /tmp/gym-component-probes.py
+SH
+# Native installers retain their versions, hashes, architecture and verification behavior.
+RUN <<'SH'
+venvs=/opt/nemo-gym/cache/consumer-venvs
+printf 'START native-IFBench-and-NLTK\n'
+UV_OFFLINE=0 "$venvs/resources_servers/ifbench/.venv/bin/python" -u -c \
+    'from resources_servers.ifbench.setup_ifbench import ensure_ifbench; ensure_ifbench()'
+printf 'START native-NewtonBench\n'
+"$venvs/resources_servers/newton_bench/.venv/bin/python" -u -c \
+    'from resources_servers.newton_bench.setup_newton_bench import ensure_newton_bench; ensure_newton_bench(); from resources_servers.newton_bench.app import _load_module; print(_load_module("m0_gravity")["core"].__file__)'
+printf 'START native-ether0\n'
+"$venvs/resources_servers/ether0/.venv/bin/python" -u -c \
+    'from resources_servers.ether0.setup_ether0 import ensure_ether0; ensure_ether0(); from resources_servers.ether0.app import EVAL_FUNCTIONS; print(sorted(EVAL_FUNCTIONS))'
+printf 'START native-RNA-fold-and-suites\n'
+"$venvs/responses_api_agents/rna_design_agent/.venv/bin/python" -u - <<'PY'
+import sys
+sys.path.insert(0, '/opt/nemo-gym/responses_api_agents/rna_design_agent')
+from setup_eternafold import ensure_eternafold
+from prepare import ensure_suites
+print(ensure_eternafold(), flush=True)
+ensure_suites()
+from rds.tools.fold import EternaFoldIn, fold_eternafold
+print(fold_eternafold(EternaFoldIn(sequences=['GGGAAACCC'])), flush=True)
+PY
+printf 'START native-ChemCoTBench-reference-and-MolOpt\n'
+UV_OFFLINE=0 HF_HUB_OFFLINE=0 "$venvs/resources_servers/chemcotbench/.venv/bin/python" -u - <<'PY'
+from resources_servers.chemcotbench.setup_upstream import ensure_repository, ensure_data
+from resources_servers.chemcotbench.setup_molopt import ensure_molopt_runtime
+print(ensure_repository(None), flush=True)
+print(ensure_data(None), flush=True)
+print(ensure_molopt_runtime(cache_dir='/opt/nemo-gym/cache/molopt'), flush=True)
+PY
+printf 'START native-Node-bootstrap\n'
+"$venvs/responses_api_agents/codex_agent/.venv/bin/python" -u -c \
+    'from responses_api_agents.codex_agent.setup_codex import ensure_node; ensure_node()'
+for binary in node npm npx; do
+    ln -s "/opt/nemo-gym/responses_api_agents/codex_agent/.codex_node/bin/$binary" "/usr/local/bin/$binary"
+done
+printf 'START native-abcMIDI\n'
+"$venvs/resources_servers/mimo_music/.venv/bin/python" -u -c \
+    'from resources_servers.mimo_music.setup_abc2midi import ensure_abc2midi; print(ensure_abc2midi())'
+ln -s /opt/nemo-gym/resources_servers/mimo_music/.abcmidi/bin/abc2midi /usr/local/bin/abc2midi
+printf 'START native-Chromium-install\n'
+"$venvs/resources_servers/interactive_browser/.venv/bin/python" -m playwright install chromium
+# Preserve the exact resolved identities where the native helpers use an upstream default branch.
+{
+    git -C NewtonBench rev-parse HEAD
+    git -C resources_servers/ether0/.ether0 rev-parse HEAD
+    git -C responses_api_agents/rna_design_agent/.eternafold/EternaFold rev-parse HEAD
+    dpkg-query -W enroot ffmpeg
+} > /opt/nemo-gym/cache/validation-reports/resolved-inputs.txt
+SH
+ENV CHEMCOTBENCH_TEST_REPO=/opt/nemo-gym/resources_servers/chemcotbench/.upstream/dcd35470de4096a1b10ee9ed6f072bcee983a9cc \
+    CHEMCOTBENCH_TEST_DATA=/opt/nemo-gym/cache/huggingface/hub/datasets--fresnellll--ChemCoTBench-V2/snapshots/f0bb2fb00c97cb3257294a639e28f960f2da157e \
+    CHEMCOTBENCH_TEST_MOLOPT_PYTHON=/opt/nemo-gym/cache/molopt/venv/bin/python \
+    CHEMCOTBENCH_TEST_ORACLE_DIR=/opt/nemo-gym/cache/molopt \
+    ARNIEFILE=/opt/nemo-gym/responses_api_agents/rna_design_agent/.eternafold/arniefile.txt
+RUN <<'SH'
+# Keep COPY file modes; restore the native runtime owner without broadening access.
+find /opt/nemo-gym -path /opt/nemo-gym/cache -prune -o -type d -exec chown 65532:65532 {} +
+chown -R 65532:65532 /opt/gym-validation-driver /opt/nemo-gym/cache \
+    /opt/nemo-gym/NewtonBench \
+    /opt/nemo-gym/resources_servers/ether0/.ether0 \
+    /opt/nemo-gym/resources_servers/ifbench/.ifbench \
+    /opt/nemo-gym/resources_servers/mimo_music/.abcmidi \
+    /opt/nemo-gym/resources_servers/chemcotbench/.upstream \
+    /opt/nemo-gym/responses_api_agents/rna_design_agent/.eternafold \
+    /opt/nemo-gym/responses_api_agents/rna_design_agent/suites \
+    /opt/nemo-gym/responses_api_agents/codex_agent/.codex_node
+SH
+USER 65532:65532
+RUN --network=none <<'SH'
+umask 0022
+printf 'START offline-nonroot-consumer-probes\n'
+export UV_OFFLINE=1 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
+mkdir /opt/nemo-gym/cache/.ownership-probe
+rmdir /opt/nemo-gym/cache/.ownership-probe
+venvs=/opt/nemo-gym/cache/consumer-venvs
+"$venvs/resources_servers/ifbench/.venv/bin/python" -u -c \
+    'from resources_servers.ifbench.setup_ifbench import ensure_ifbench; ensure_ifbench(); import instructions_registry, nltk; instruction=instructions_registry.INSTRUCTION_DICT["count:numbers"]("count:numbers"); instruction.build_description(num_numbers=2); print(instruction.check_following("1 2")); print(nltk.sent_tokenize("One sentence. Another sentence."))'
+"$venvs/resources_servers/newton_bench/.venv/bin/python" -u -c \
+    'from resources_servers.newton_bench.setup_newton_bench import ensure_newton_bench; ensure_newton_bench(); from resources_servers.newton_bench.app import _load_module; assert _load_module("m0_gravity")["core"]'
+"$venvs/resources_servers/ether0/.venv/bin/python" -u -c \
+    'from resources_servers.ether0.app import EVAL_FUNCTIONS, extract_answer_loose; assert EVAL_FUNCTIONS; print(extract_answer_loose("Answer: 2"))'
+"$venvs/resources_servers/chemcotbench/.venv/bin/python" -u - <<'PY'
+import os, subprocess
+from resources_servers.chemcotbench.setup_upstream import ensure_repository, ensure_data
+from resources_servers.chemcotbench.setup_molopt import ensure_molopt_runtime, ORACLE_CHECK
+ensure_repository(os.environ['CHEMCOTBENCH_TEST_REPO'])
+ensure_data(os.environ['CHEMCOTBENCH_TEST_DATA'])
+python, cache = ensure_molopt_runtime(os.environ['CHEMCOTBENCH_TEST_MOLOPT_PYTHON'], os.environ['CHEMCOTBENCH_TEST_ORACLE_DIR'])
+subprocess.run([str(python), '-c', ORACLE_CHECK], cwd=cache, check=True)
+PY
+"$venvs/responses_api_agents/rna_design_agent/.venv/bin/python" -u - <<'PY'
+import sys
+sys.path.insert(0, '/opt/nemo-gym/responses_api_agents/rna_design_agent')
+from setup_eternafold import ensure_eternafold
+from prepare import ensure_suites
+ensure_eternafold(); ensure_suites()
+from rds.tools.fold import EternaFoldIn, fold_eternafold
+print(fold_eternafold(EternaFoldIn(sequences=['GGGAAACCC'])))
+PY
+node -e 'const cp=require("node:child_process");const p=cp.spawnSync(process.execPath,["-e","process.stdout.write(\"ready\")"],{encoding:"utf8"});if(p.status!==0||p.stdout!=="ready")process.exit(1)'
+"$venvs/resources_servers/interactive_browser/.venv/bin/python" -u - <<'PY'
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.set_content('<title>offline-ready</title><input id="probe">')
+    page.locator('#probe').fill('ready')
+    assert page.title() == 'offline-ready'
+    assert page.locator('#probe').input_value() == 'ready'
+    browser.close()
+PY
+printf 'X:1\nT:Probe\nM:4/4\nL:1/4\nK:C\nC D E F|\n' > /tmp/gym-probe.abc
+abc2midi /tmp/gym-probe.abc -o /tmp/gym-probe.mid
+test -s /tmp/gym-probe.mid
+rm /tmp/gym-probe.abc /tmp/gym-probe.mid
+printf 'OFFLINE_NONROOT_CONSUMERS_COMPLETE\n'
+SH
+# Preserve the original image's root default; managed runtime selects UID 65532.
+USER root
+ENTRYPOINT ["gym"]
+CMD ["--help"]
