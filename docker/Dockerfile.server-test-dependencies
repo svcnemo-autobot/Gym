@@ -2,7 +2,7 @@
 # Build-only extension; never include this branch in the product PR.
 # Compatible CI source: 0cc28ac63a9a080c3982af6868ea2d844c3c5e70.
 # Native setup inputs: protected main 72275b85d4d9203538c0627add9306c815adaf98.
-FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:c84441023b8679336bceafa411479a4dd7b6af35fd8629178f48ddf5ec5bd7aa AS server-cache
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:c84441023b8679336bceafa411479a4dd7b6af35fd8629178f48ddf5ec5bd7aa AS server-seed
 USER root
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 WORKDIR /opt/nemo-gym
@@ -67,6 +67,10 @@ chown -R 65532:65532 /opt/nemo-gym/cache/uv /opt/nemo-gym/preparation
 SH
 # This target certifies package setup, not tests or lazy runtime assets. Retain it as
 # an immutable intermediate so later fixture/probe work cannot repeat cache seeding.
+# Publish the completed native seed independently from runtime ownership/probe work.
+# This intermediate is unvalidated for server tests and must never be a test runtime.
+LABEL org.nvidia.nemo-gym.preparation="native OS and server package seed only; runtime-user setup, assets and tests unvalidated"
+FROM server-seed AS server-cache
 USER 65532:65532
 RUN <<'SH'
 export HOME=/home/nemo-runtime UV_OFFLINE=1 UV_NO_SYNC=0
