@@ -29,6 +29,36 @@ apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Ti
 dpkg-query -W "${packages[@]}" > preparation/native-os-versions.txt
 rm -rf /var/lib/apt/lists/*
 SH
+# Native editable builds write metadata beside their source. Prepare those paths as
+# the final runtime UID, rather than creating root-owned egg-info during seeding.
+RUN <<'SH'
+python - <<'PYOWN'
+import os, tomllib
+from pathlib import Path
+root = Path('/opt/nemo-gym')
+paths = {root}
+for lock in root.glob('*/*/uv.lock'):
+    for package in tomllib.loads(lock.read_text()).get('package', []):
+        source = package.get('source', {})
+        relative = source.get('editable') or source.get('directory')
+        if relative is not None:
+            path = (lock.parent / relative).resolve()
+            if path.is_relative_to(root):
+                paths.add(path)
+for path in sorted(paths):
+    os.chown(path, 65532, 65532)
+    for directory, directories, files in os.walk(path):
+        directories[:] = [name for name in directories if name not in ('cache', '.venv', '.git', '__pycache__')]
+        metadata = Path(directory)
+        if metadata.name.endswith(('.egg-info', '.dist-info')):
+            for member in (metadata, *metadata.iterdir()):
+                if not member.is_symlink():
+                    os.chown(member, 65532, 65532)
+print('Native local/editable metadata roots:', len(paths), flush=True)
+PYOWN
+SH
+USER 65532:65532
+ENV HOME=/home/nemo-runtime
 # Record Git blob identities of every source/lock/helper the native setup can consume.
 RUN <<'SH'
 install -d -o 65532 -g 65532 /opt/nemo-gym/preparation
@@ -53,6 +83,32 @@ PY
 # Use the unchanged driver and component installers, preserving all locks and isolation.
 export UV_OFFLINE=0 UV_NO_SYNC=0 GYM_CI_DEV_VENV_DIR=/tmp/gym-cache-seed/.driver-venv
 source scripts/ci/setup_dev.sh
+# Exercise the exact previously failing native component before the expensive batch.
+# Retry once only when its log positively identifies a transport/5xx/throttle failure.
+read -r component_count component_index < <(python - <<'PYINDEX'
+from pathlib import Path
+kinds = ('resources_servers', 'responses_api_agents', 'responses_api_models', 'environment_servers')
+components = sorted(str(p) for kind in kinds for p in Path(kind).iterdir() if p.is_dir() and (p / 'README.md').is_file())
+print(len(components), components.index('resources_servers/instruction_following'))
+PYINDEX
+)
+for attempt in 1 2; do
+    log="/opt/nemo-gym/preparation/instruction-fetch-${attempt}.log"
+    status=0
+    timeout 5m ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+        "+uv_cache_dir=${UV_CACHE_DIR}" +uv_venv_dir=/tmp/gym-cache-seed \
+        "+num_shards=${component_count}" "+shard_index=${component_index}" > "$log" 2>&1 || status=$?
+    printf 'Native instruction-following setup attempt=%s exit=%s log=%s\n' "$attempt" "$status" "$log"
+    if [[ "$status" -eq 0 ]]; then
+        tail -5 "$log"
+        break
+    fi
+    tail -35 "$log"
+    if [[ "$attempt" -eq 2 ]] || ! grep -Eiq 'Failed to connect|Could.n.t connect|Connection reset|Connection timed out|HTTP[^[:alnum:]]*(429|500|502|503|504)|returned error: (429|500|502|503|504)' "$log"; then
+        exit "$status"
+    fi
+done
+batch_status=0
 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
     "+uv_cache_dir=${UV_CACHE_DIR}" +uv_venv_dir=/tmp/gym-cache-seed \
     2>&1 | tee /opt/nemo-gym/preparation/server-cache-online.log | \
@@ -61,10 +117,43 @@ for line in sys.stdin:
  m=re.match(r"^\(([^)]+)\) (.*)",line)
  if m and (m[2].startswith("Resolved ") or re.search(r"error:|cause:|hint:|[Ff]ail|Traceback|Error",m[2])): print(line,end="",flush=True)
  elif line.startswith("Server venv"): summary=True; print(line,end="",flush=True)
- elif summary: print(line,end="",flush=True)'
+ elif summary: print(line,end="",flush=True)' || batch_status=$?
+if [[ "$batch_status" -ne 0 ]]; then
+    # Recover only failed native components and preserve the completed cache batch.
+    python - <<'PYRETRY' > /tmp/gym-component-retries.txt
+from pathlib import Path
+import re
+log = Path('/opt/nemo-gym/preparation/server-cache-online.log').read_text()
+failed = re.search(r'Server venv setup failed [^\n]*:\n((?:- [^\n]+\n)+)', log)
+if failed is None:
+    raise RuntimeError('Native failed-component summary is missing')
+kinds = ('resources_servers', 'responses_api_agents', 'responses_api_models', 'environment_servers')
+components = sorted(str(p) for kind in kinds for p in Path(kind).iterdir() if p.is_dir() and (p / 'README.md').is_file())
+transport = re.compile(r'Failed to connect|Could.n.t connect|Connection reset|Connection timed out|HTTP[^a-zA-Z0-9]*(429|500|502|503|504)|returned error: (429|500|502|503|504)', re.I)
+for component in failed.group(1).splitlines():
+    component = component.removeprefix('- ')
+    diagnostic = '\n'.join(line for line in log.splitlines() if '(' + component + ')' in line)
+    if not transport.search(diagnostic):
+        raise RuntimeError('Native component failure is not an eligible transport retry: ' + component)
+    print(len(components), components.index(component), component)
+PYRETRY
+    while read -r count index component; do
+        retry_log="/opt/nemo-gym/preparation/retry-${index}.log"
+        retry_status=0
+        timeout 5m ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
+            "+uv_cache_dir=${UV_CACHE_DIR}" +uv_venv_dir=/tmp/gym-cache-seed \
+            "+num_shards=${count}" "+shard_index=${index}" > "$retry_log" 2>&1 || retry_status=$?
+        printf 'Native component transport recovery component=%s exit=%s log=%s\n' "$component" "$retry_status" "$retry_log"
+        tail -35 "$retry_log"
+        if [[ "$retry_status" -ne 0 ]]; then exit "$retry_status"; fi
+    done < /tmp/gym-component-retries.txt
+    rm /tmp/gym-component-retries.txt
+fi
 rm -rf /tmp/gym-cache-seed
-chown -R 65532:65532 /opt/nemo-gym/cache/uv /opt/nemo-gym/preparation
+# The native package cache and editable metadata were created by the runtime user.
+test "$(id -u)" = 65532
 SH
+USER root
 # This target certifies package setup, not tests or lazy runtime assets. Retain it as
 # an immutable intermediate so later fixture/probe work cannot repeat cache seeding.
 # Publish the completed native seed independently from runtime ownership/probe work.
