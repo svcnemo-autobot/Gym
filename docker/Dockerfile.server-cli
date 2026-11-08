@@ -1,0 +1,82 @@
+# syntax=docker/dockerfile:1.19
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:636c95e5df8cfcfae95bd071e52f3c7c63c19d39602342d619d6cb1cdd87e547
+# Runtime-only repair. The product PR remains success.md only.
+# Source inputs at bfb4698986757fe067274d21289df5dcadc26f01:
+# scripts/ci/setup_dev.sh: 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da
+# nemo_gym/cli/env.py: a29b93b067b94ddca202555e8b65278a0213ffee
+# nemo_gym/orchestration/server_venv.py: 7e92e7f39d9ba6175d0393a4371bee10ce90938f
+# nemo_gym/sandbox/providers/docker/provider.py: 77ff4f60178c120625b3a46d804d836f4835b879
+# responses_api_agents/anyterminal_agent/app.py: a1b0307a8c3cae32958f8768fd3a52ad1f424401
+# responses_api_agents/anyterminal_agent/tests/test_app.py: cb369e59f6c199d5c20e32345a65e99de2152ea9
+# responses_api_agents/anyterminal_agent/pyproject.toml: 305b8467c192bbb179ce4dace6c0c0bb356cbcd9
+# responses_api_agents/anyterminal_agent/uv.lock: 81816a94039f9be768f5382891be45e966b9b4d5
+# responses_api_agents/pi_agent/app.py: 9013997d2e738216d8263779dfdf536925e6f68e
+# responses_api_agents/pi_agent/tests/test_app.py: e56ee2b12dde26e2974c782440b73bb45083287c
+# responses_api_agents/pi_agent/pyproject.toml: 3a9e4a42c7fd6bdd41380238f52fae2a1f686f9f
+# responses_api_agents/pi_agent/uv.lock: 278ae06314ee2065010ae109739b55075c597626
+# responses_api_agents/pi_agent/setup_pi.py: 79b0d5e9081fbfe75332833e94e24e8cd4b207c1
+# responses_api_agents/pi_agent/configs/pi_agent.yaml: 74c8338711fc55d74934a2eb0a0dcf8a68488336
+USER root
+WORKDIR /opt/nemo-gym
+# Use the base image's signed Ubuntu repositories and retain the resolved transaction.
+RUN <<'EOF' bash -eu -o pipefail
+apt-get update
+apt-cache policy docker.io
+apt-get --simulate install --no-install-recommends docker.io
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker.io
+mkdir -p /opt/nemo-gym/cache/cli-extension/probes
+# The native Pi configuration pins this version; its local bootstrap otherwise requests latest.
+python - <<'PY_PI'
+import re
+from pathlib import Path
+from responses_api_agents.pi_agent.setup_pi import ensure_pi
+version = re.search(r'pi_version:\s*(\S+)', Path('responses_api_agents/pi_agent/configs/pi_agent.yaml').read_text())[1]
+assert version == '0.80.2', version
+ensure_pi(version)
+PY_PI
+docker --version
+pi --version
+dpkg-query -W > /opt/nemo-gym/cache/cli-extension/os-packages.tsv
+npm list --global --depth=0 > /opt/nemo-gym/cache/cli-extension/npm-packages.txt
+chown -R 65532:65532 /opt/nemo-gym/cache/cli-extension
+rm -rf /var/lib/apt/lists/*
+EOF
+USER 65532:65532
+# Exercise the native provider constructor and Pi's native first-use path offline,
+# using fresh component environments and the actual runtime UID.
+RUN <<'EOF' bash -eu -o pipefail
+export UV_OFFLINE=1 UV_LINK_MODE=copy
+python -u - <<'PY_CONSUMERS'
+import json, os, shutil, subprocess, sys
+from pathlib import Path
+assert os.getuid() == 65532
+assert Path.home() == Path('/home/nemo-runtime')
+for path in [Path.home(), Path(os.environ['UV_CACHE_DIR']), Path('/opt/nemo-gym/cache/cli-extension')]:
+    probe = path / '.cli-extension-write-probe'
+    probe.write_text('writable')
+    probe.unlink()
+sys.argv = ['cli-extension-preflight', '+uv_venv_dir=/opt/nemo-gym/cache/cli-extension/probes', f'+uv_cache_dir={os.environ["UV_CACHE_DIR"]}']
+from nemo_gym.cli.env import TestConfig, _setup_single
+from nemo_gym.config.global_config import get_global_config_dict
+from nemo_gym.orchestration.server_venv import get_venv_path
+config = get_global_config_dict()
+checks = {
+ 'responses_api_agents/anyterminal_agent': "from nemo_gym.sandbox.providers.docker import DockerProvider; p = DockerProvider(); import shutil; assert p._binary == shutil.which('docker'); print('native Docker provider constructed', p._binary)",
+ 'responses_api_agents/pi_agent': "from responses_api_agents.pi_agent.setup_pi import ensure_pi; import subprocess; ensure_pi('0.80.2'); assert subprocess.check_output(['pi', '--version'], text=True).strip() == '0.80.2'; print('native Pi bootstrap reused installed CLI')",
+}
+rows = []
+for component, code in checks.items():
+    setup = TestConfig(entrypoint=component)
+    assert _setup_single(setup, config).wait() == 0, component
+    venv = get_venv_path(setup.resolved_dir_path, config)
+    env = {**os.environ, 'PYTHONPATH': f'{setup.resolved_dir_path}:/opt/nemo-gym', 'npm_config_offline': 'true'}
+    subprocess.run([str(venv / 'bin/python'), '-c', code], cwd=setup.resolved_dir_path, env=env, check=True, timeout=120)
+    rows.append({'component': component, 'python': str(venv / 'bin/python'), 'status': 'passed'})
+Path('/opt/nemo-gym/cache/cli-extension/consumer-probes.json').write_text(json.dumps(rows, indent=2))
+print(json.dumps(rows), flush=True)
+PY_CONSUMERS
+EOF
+# Preserve the compatible base image's default user; profile workloads supply their native UID.
+USER root
