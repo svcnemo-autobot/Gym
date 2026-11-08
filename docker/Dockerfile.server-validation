@@ -91,11 +91,22 @@ SH
 # Keep the large package seed independent of lazy asset preparation.
 RUN <<'SH'
 mkdir -p /opt/nemo-gym/cache/validation-reports
+cat > /tmp/gym-seed-console.py <<'PY'
+import re
+import sys
+for raw in sys.stdin:
+    for line in raw.split('\r'):
+        # Omit only installed-package inventories; preserve every component name,
+        # resolver/transport/build diagnostic, progress line and final summary.
+        if re.match(r'^\s*(?:\([^)]*\)\s*)?[+~-]\s+[^ ]+==', line):
+            continue
+        print(line.rstrip('\n'), flush=True)
+PY
 printf 'START native-server-environment-seed\n'
 status=0
 UV_OFFLINE=0 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
     +uv_cache_dir=/opt/nemo-gym/cache/uv +uv_venv_dir=/tmp/gym-server-seed \
-    2>&1 | tee /opt/nemo-gym/cache/validation-reports/server-seed.log || status=$?
+    2>&1 | tee /opt/nemo-gym/cache/validation-reports/server-seed.log | python -u /tmp/gym-seed-console.py || status=$?
 printf 'NATIVE_SERVER_ONLINE_SEED_EXIT=%s\n' "$status"
 rm -rf /tmp/gym-server-seed
 # An online sync can fail when revalidating an already cached immutable archive.
@@ -104,7 +115,7 @@ rm -rf /tmp/gym-server-seed
 offline_status=0
 UV_OFFLINE=1 ng_test_all +setup_only=true +delete_venvs_after_each_test=true \
     +uv_cache_dir=/opt/nemo-gym/cache/uv +uv_venv_dir=/tmp/gym-server-offline-seed \
-    2>&1 | tee /opt/nemo-gym/cache/validation-reports/server-offline-seed.log || offline_status=$?
+    2>&1 | tee /opt/nemo-gym/cache/validation-reports/server-offline-seed.log | python -u /tmp/gym-seed-console.py || offline_status=$?
 printf 'NATIVE_SERVER_OFFLINE_SEED_EXIT=%s\n' "$offline_status"
 test "$offline_status" = 0
 rm -rf /tmp/gym-server-offline-seed
@@ -218,13 +229,26 @@ export UV_OFFLINE=1 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
 mkdir /opt/nemo-gym/cache/.ownership-probe
 rmdir /opt/nemo-gym/cache/.ownership-probe
 venvs=/opt/nemo-gym/cache/consumer-venvs
-"$venvs/resources_servers/ifbench/.venv/bin/python" -u -c \
-    'from resources_servers.ifbench.setup_ifbench import ensure_ifbench; ensure_ifbench(); import instructions_registry, nltk; instruction=instructions_registry.INSTRUCTION_DICT["count:numbers"]("count:numbers"); instruction.build_description(num_numbers=2); print(instruction.check_following("1 2")); print(nltk.sent_tokenize("One sentence. Another sentence."))'
-"$venvs/resources_servers/newton_bench/.venv/bin/python" -u -c \
+failed=0
+probe() {
+    local name="$1"
+    shift
+    printf 'START offline-consumer %s\n' "$name"
+    if "$@"; then
+        printf 'OFFLINE_CONSUMER_EXIT %s 0\n' "$name"
+    else
+        local status=$?
+        printf 'OFFLINE_CONSUMER_EXIT %s %s\n' "$name" "$status"
+        failed=1
+    fi
+}
+probe ifbench "$venvs/resources_servers/ifbench/.venv/bin/python" -u -c \
+    'from resources_servers.ifbench.setup_ifbench import ensure_ifbench; ensure_ifbench(); import instructions_registry, nltk; instruction=instructions_registry.INSTRUCTION_DICT["count:numbers"]("count:numbers"); instruction.build_description(N=2); assert instruction.check_following("1 2"); assert nltk.sent_tokenize("One sentence. Another sentence.") == ["One sentence.", "Another sentence."]'
+probe newton-bench "$venvs/resources_servers/newton_bench/.venv/bin/python" -u -c \
     'from resources_servers.newton_bench.setup_newton_bench import ensure_newton_bench; ensure_newton_bench(); from resources_servers.newton_bench.app import _load_module; assert _load_module("m0_gravity")["core"]'
-"$venvs/resources_servers/ether0/.venv/bin/python" -u -c \
-    'from resources_servers.ether0.app import EVAL_FUNCTIONS, extract_answer_loose; assert EVAL_FUNCTIONS; print(extract_answer_loose("Answer: 2"))'
-"$venvs/resources_servers/chemcotbench/.venv/bin/python" -u - <<'PY'
+probe ether0 "$venvs/resources_servers/ether0/.venv/bin/python" -u -c \
+    'from resources_servers.ether0.app import EVAL_FUNCTIONS, extract_answer_loose; assert EVAL_FUNCTIONS; assert extract_answer_loose("<answer>CCO</answer>").strip() == "CCO"'
+probe chemcotbench "$venvs/resources_servers/chemcotbench/.venv/bin/python" -u - <<'PY'
 import os, subprocess
 from resources_servers.chemcotbench.setup_upstream import ensure_repository, ensure_data
 from resources_servers.chemcotbench.setup_molopt import ensure_molopt_runtime, ORACLE_CHECK
@@ -233,7 +257,7 @@ ensure_data(os.environ['CHEMCOTBENCH_TEST_DATA'])
 python, cache = ensure_molopt_runtime(os.environ['CHEMCOTBENCH_TEST_MOLOPT_PYTHON'], os.environ['CHEMCOTBENCH_TEST_ORACLE_DIR'])
 subprocess.run([str(python), '-c', ORACLE_CHECK], cwd=cache, check=True)
 PY
-"$venvs/responses_api_agents/rna_design_agent/.venv/bin/python" -u - <<'PY'
+probe rna-design "$venvs/responses_api_agents/rna_design_agent/.venv/bin/python" -u - <<'PY'
 import sys
 sys.path.insert(0, '/opt/nemo-gym/responses_api_agents/rna_design_agent')
 from setup_eternafold import ensure_eternafold
@@ -242,8 +266,8 @@ ensure_eternafold(); ensure_suites()
 from rds.tools.fold import EternaFoldIn, fold_eternafold
 print(fold_eternafold(EternaFoldIn(sequences=['GGGAAACCC'])))
 PY
-node -e 'const cp=require("node:child_process");const p=cp.spawnSync(process.execPath,["-e","process.stdout.write(\"ready\")"],{encoding:"utf8"});if(p.status!==0||p.stdout!=="ready")process.exit(1)'
-"$venvs/resources_servers/interactive_browser/.venv/bin/python" -u - <<'PY'
+probe node node -e 'const cp=require("node:child_process");const p=cp.spawnSync(process.execPath,["-e","process.stdout.write(\"ready\")"],{encoding:"utf8"});if(p.status!==0||p.stdout!=="ready")process.exit(1)'
+probe chromium "$venvs/resources_servers/interactive_browser/.venv/bin/python" -u - <<'PY'
 from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
@@ -254,10 +278,12 @@ with sync_playwright() as p:
     assert page.locator('#probe').input_value() == 'ready'
     browser.close()
 PY
-printf 'X:1\nT:Probe\nM:4/4\nL:1/4\nK:C\nC D E F|\n' > /tmp/gym-probe.abc
+probe abcmidi /bin/bash -euo pipefail -c '
+printf "X:1\nT:Probe\nM:4/4\nL:1/4\nK:C\nC D E F|\n" > /tmp/gym-probe.abc
 abc2midi /tmp/gym-probe.abc -o /tmp/gym-probe.mid
 test -s /tmp/gym-probe.mid
-rm /tmp/gym-probe.abc /tmp/gym-probe.mid
+rm /tmp/gym-probe.abc /tmp/gym-probe.mid'
+test "$failed" = 0
 printf 'OFFLINE_NONROOT_CONSUMERS_COMPLETE\n'
 SH
 # Preserve the original image's root default; managed runtime selects UID 65532.
