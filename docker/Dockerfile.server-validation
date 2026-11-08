@@ -41,23 +41,50 @@ RUN chown root:root /opt/nemo-gym && UV_OFFLINE=0 uv sync --locked --extra dev
 ENV PATH=/opt/gym-validation-driver/bin:/usr/local/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/mpi/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 # Bound uv transport recovery without changing native manifests, pins or setup.
 ENV UV_HTTP_RETRIES=3 UV_HTTP_TIMEOUT=60
-# Run the two previously failed native setups first so their complete diagnostics
-# reach the durable build log instead of being lost behind a last-lines tail.
+# Warm the two external-archive environments through unchanged native setup.
+# The pinned nooa archive returned HTTP 503 after uv's three HTTP retries.
+# Allow one bounded identical native setup replay only for a recorded transport
+# failure, then require a fresh offline install; do not retry deterministic errors.
 RUN <<'SH'
 UV_OFFLINE=0 python -u - <<'PY'
+import re
+import subprocess
+from pathlib import Path
 from nemo_gym.cli.env import TestConfig, _setup_single
 from nemo_gym.config.global_config import get_global_config_dict
+reports = Path('/opt/nemo-gym/cache/validation-reports/targeted-seed')
+reports.mkdir(parents=True, exist_ok=True)
 config = get_global_config_dict()
 config.uv_venv_dir = '/tmp/gym-targeted-seed'
 failed = []
 for component in ('resources_servers/instruction_following', 'responses_api_agents/nooa_agent'):
-    print('START previously-failed-native-setup', component, flush=True)
-    status = _setup_single(TestConfig(entrypoint=component), config).wait()
-    print('TARGETED_NATIVE_SETUP_EXIT', component, status, flush=True)
-    if status:
-        failed.append(component)
+    for attempt in (1, 2):
+        log = reports / f"{component.replace('/', '__')}-{attempt}.log"
+        print('START native-archive-setup', component, attempt, flush=True)
+        with log.open('w') as output:
+            command = [
+                '/opt/gym-validation-driver/bin/python', '-u', '-c',
+                'from nemo_gym.cli.env import TestConfig, _setup_single; '
+                'from nemo_gym.config.global_config import get_global_config_dict; '
+                f'c=get_global_config_dict(); c.uv_venv_dir={config.uv_venv_dir!r}; '
+                f'raise SystemExit(_setup_single(TestConfig(entrypoint={component!r}), c).wait())',
+            ]
+            try:
+                result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=300)
+                status = result.returncode
+            except subprocess.TimeoutExpired:
+                status = 124
+        text = log.read_text()
+        print(text, end='', flush=True)
+        print('TARGETED_NATIVE_SETUP_EXIT', component, attempt, status, flush=True)
+        if status == 0:
+            break
+        transient = bool(re.search(r'HTTP status server error \(5[0-9]{2}|429 Too Many Requests|connection reset|connection timed out', text, re.I))
+        if attempt == 2 or not transient:
+            failed.append(component)
+            break
 if failed:
-    raise RuntimeError(f'Native dependency setup failed: {failed}')
+    raise RuntimeError(f'Native dependency setup failed after bounded recovery: {failed}')
 PY
 rm -rf /tmp/gym-targeted-seed
 SH
