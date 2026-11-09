@@ -1,0 +1,125 @@
+# syntax=docker/dockerfile:1
+# Build-only closure; never include in the success.md product PR.
+# Inherited source: protected main 72275b85d4d9203538c0627add9306c815adaf98.
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:f066c3a3ce702945ed459b0d509c2dcf33bfbd1ed8b73e107dc9f776f9c3e1d6 AS server-closure
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+USER root
+WORKDIR /opt/nemo-gym
+# Provider construction requires a real CLI, but does not contact a daemon.
+# Preserve the signed OS repository resolver and record its proposed transaction.
+RUN <<'SH'
+export DEBIAN_FRONTEND=noninteractive
+apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+apt-cache policy docker.io > preparation/docker-cli-policy.txt
+apt-get --simulate install -y --no-install-recommends docker.io > preparation/docker-cli-plan.txt
+apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends docker.io
+dpkg-query -W docker.io > preparation/docker-cli-version.txt
+rm -rf /var/lib/apt/lists/*
+SH
+USER 65532:65532
+ENV HOME=/home/nemo-runtime UV_LINK_MODE=copy UV_OFFLINE=0 UV_NO_SYNC=0
+ENV _CUDA_COMPAT_STATUS=0 HF_HOME=/home/nemo-runtime/.cache/huggingface HF_HUB_CACHE=/home/nemo-runtime/.cache/huggingface/hub
+ENV npm_config_prefix=/home/nemo-runtime/.local npm_config_fetch_retries=2 npm_config_fetch_timeout=60000
+RUN <<'SH'
+umask 0022
+mkdir -p preparation/closure
+python -u - <<'PYINPUTS'
+import hashlib,json,pathlib
+inputs = {'scripts/ci/setup_dev.sh': {'git_blob': '1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da', 'sha256': '3888f5aeb8c81895911d6794249c4afaf97a2a6f80fcd040e93f5e94c0da47d0'}, 'resources_servers/big_finance/app.py': {'git_blob': '70a36f50153b6b4fabdb18dce75b345d1769daa2', 'sha256': 'ad487344f13565788c19268c341d5fc42a78e2116dfd8c79d208be2710626fda'}, 'resources_servers/big_finance/pyproject.toml': {'git_blob': '9a2f767e99954eae82a8fa39a65f2acaa8ddb920', 'sha256': 'ff23c7194beb31b2d40c80d13a4eeee250de7ee55e2e555332ceaecb9a52efde'}, 'resources_servers/big_finance/uv.lock': {'git_blob': '2fbc86cbafe9c297c41e6e5fecbcd09fe00d8e7b', 'sha256': 'a5afa089eb02bba649e230e5e378f9147783cac10eda4a64263e910c183d6846'}, 'responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt': {'git_blob': '31efc0af7ffabce2beaf7aeec81ca8102e27a884', 'sha256': '659ada8dde5511133902d224272aa22debde2a177d665f8086cf001de33db60c'}, 'responses_api_agents/miniswe_sandboxed_agent/tests/conftest.py': {'git_blob': 'fc1c7da5f9daf387363dc45bf075487fd5c4d0fe', 'sha256': '4445e05467273bbc5057184e0e1dd4c574e7bbd81d32d52d83e8aae3cce3fb8a'}, 'responses_api_agents/miniswe_sandboxed_agent/tests/test_bootstrap.py': {'git_blob': '886f056c11a86e25b570d0750ace35839b17d4c8', 'sha256': '58dbd8e92ca41c874881a8b0f3673b065dd9ebb3502a862383760f37dd2ddc95'}, 'responses_api_agents/pi_agent/setup_pi.py': {'git_blob': '79b0d5e9081fbfe75332833e94e24e8cd4b207c1', 'sha256': 'ff37a92a0b317667a0353bd0a84b1a22dbefd41bec838853c7fae371d77d12b9'}, 'responses_api_agents/pi_agent/configs/pi_agent.yaml': {'git_blob': '74c8338711fc55d74934a2eb0a0dcf8a68488336', 'sha256': '075dea1788d1a5849b1c544a16256a7fda323c55f0a3adb1d06d4eb74d2a3184'}, 'responses_api_agents/pi_agent/uv.lock': {'git_blob': '278ae06314ee2065010ae109739b55075c597626', 'sha256': '67e3887d0d1e26b15a62e91aac1442710d54af1f129c39a08cba91eba22f09b9'}, 'responses_api_agents/anyterminal_agent/app.py': {'git_blob': 'a1b0307a8c3cae32958f8768fd3a52ad1f424401', 'sha256': '2bbc702542f586396b129867326852402a93960710be41ee90488b5c4bcae28d'}, 'responses_api_agents/anyterminal_agent/uv.lock': {'git_blob': '81816a94039f9be768f5382891be45e966b9b4d5', 'sha256': 'f9990eba322a1e3d9a36f980a2243d22d692255f9e3e2511dce8bfcb439910d9'}, 'nemo_gym/sandbox/providers/docker/provider.py': {'git_blob': '77ff4f60178c120625b3a46d804d836f4835b879', 'sha256': '04d7c2100455fd34d36a846f9191b0d7774663321b2c88c81220c8a228f6201a'}, 'resources_servers/chemcotbench/setup_upstream.py': {'git_blob': '8c8992a42d1a0f72aad5bc04b670e963505ce65c', 'sha256': '55e3d91bb20c66d454ae5ae317394885c50e4d9c0c99f47cd6effe6c962d39e0'}, 'resources_servers/chemcotbench/verifier_fixture.py': {'git_blob': '44fb209bb2b75276f3212aa5ab79619833410ee9', 'sha256': '6dfd18d3ac16c8aed69f047abdfec34cf0f5dfb2eec249d3e3e8e507643483b5'}, 'resources_servers/chemcotbench/uv.lock': {'git_blob': '39ea3668eb5380cf4d15797102a1ec5f56fb1c06', 'sha256': 'dc90e3dd2b162f1e6b43fde10cedb8c422c3807a393851c4cc97048c263cce28'}}
+for f,record in inputs.items():
+ assert hashlib.sha256(pathlib.Path(f).read_bytes()).hexdigest()==record['sha256'],f
+pathlib.Path('preparation/closure/native-inputs.json').write_text(json.dumps(inputs,indent=2))
+print('NATIVE_INPUT_IDENTITIES_VERIFIED',len(inputs),flush=True)
+PYINPUTS
+cat > /tmp/gym-closure-prepare.py <<'PYPREP'
+import hashlib, json, os, pathlib, re, shutil, subprocess, sys, time
+root=pathlib.Path('/opt/nemo-gym'); out=root/'preparation/closure'
+components=sorted(str(p.relative_to(root)) for kind in ('resources_servers','responses_api_agents','responses_api_models','environment_servers') for p in (root/kind).iterdir() if p.is_dir() and (p/'README.md').is_file())
+programs={
+'resources_servers/big_finance': r'''import tiktoken
+enc=tiktoken.get_encoding('cl100k_base');assert enc.decode(enc.encode('native offline finance consumer'))=='native offline finance consumer'
+import resources_servers.big_finance.app
+print('FINANCE_NATIVE_IMPORT_AND_TOKENIZER_PASSED')
+''',
+'responses_api_agents/miniswe_sandboxed_agent': r'''import pathlib,subprocess,sys,os,shutil
+p=pathlib.Path('/tmp/gym-closure-miniswe');shutil.rmtree(p,ignore_errors=True)
+try:
+ subprocess.run(['uv','--no-config','venv',str(p),'--python',sys.executable],check=True,timeout=60)
+ subprocess.run(['uv','--no-config','pip','install','--python',str(p/'bin/python'),'-r','runtime/requirements.txt'],check=True,timeout=450)
+ code="from importlib.metadata import version; from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler; from minisweagent.environments.local import LocalEnvironment; assert version('litellm')=='1.106.0'; assert version('mini-swe-agent')=='2.4.6'; assert version('mcp')=='2.2.0'; print('MINISWE_NATIVE_ISOLATED_BOOTSTRAP_PASSED')"
+ subprocess.run([str(p/'bin/python'),'-u','-c',code],check=True,timeout=90,env=os.environ|{'LITELLM_LOCAL_MODEL_COST_MAP':'true'})
+finally:shutil.rmtree(p,ignore_errors=True)
+''',
+'responses_api_agents/pi_agent': r'''import pathlib,yaml,subprocess
+from responses_api_agents.pi_agent.setup_pi import ensure_pi
+config=yaml.safe_load(pathlib.Path('configs/pi_agent.yaml').read_text());pin=config['pi_agent']['responses_api_agents']['pi_agent']['pi_version']
+assert pin=='0.80.2'
+ensure_pi(version=pin)
+version=subprocess.check_output(['pi','--version'],text=True,timeout=60).strip();assert pin in version,version
+print('PI_NATIVE_PREPARATION_PASSED',version)
+''',
+'responses_api_agents/anyterminal_agent': r'''from nemo_gym.sandbox import DockerProvider
+import subprocess
+provider=DockerProvider();assert provider._binary
+print('DOCKER_NATIVE_CONSTRUCTOR_PASSED',subprocess.check_output([provider._binary,'--version'],text=True,timeout=30).strip())
+''',
+'resources_servers/chemcotbench': r'''from resources_servers.chemcotbench.setup_upstream import ensure_data
+from resources_servers.chemcotbench.verifier_fixture import create_server
+import asyncio
+print('CHEM_NATIVE_DEFAULT_DATA',ensure_data(None));server=create_server();asyncio.run(server.close());print('CHEM_NATIVE_DEFAULT_CONSTRUCTOR_PASSED')
+'''
+}
+phase=sys.argv[1];records=[]
+for mod,code in programs.items():
+ log=out/(phase+'-'+mod.replace('/','__')+'.log');start=time.monotonic();rc=0
+ env=os.environ|{'PYTHONPATH':str(root/mod)+os.pathsep+str(root),'NEMO_GYM_EXTRA_ROOTS':str(root)}
+ print(json.dumps({'phase':phase,'component':mod,'stage':'native-start','log':str(log)}),flush=True)
+ with log.open('w') as f:
+  for attempt in (1,2):
+   try:
+    command=['ng_test_all','+setup_only=true','+delete_venvs_after_each_test=false',f'+uv_cache_dir={os.environ["UV_CACHE_DIR"]}','+uv_venv_dir=/tmp/gym-closure-envs',f'+num_shards={len(components)}',f'+shard_index={components.index(mod)}']
+    p=subprocess.run(command,cwd=root,env=env,stdout=f,stderr=subprocess.STDOUT,timeout=300);rc=p.returncode
+    if rc==0:
+     p=subprocess.run([f'/tmp/gym-closure-envs/{mod}/.venv/bin/python','-u','-c',code],cwd=root/mod,env=env,stdout=f,stderr=subprocess.STDOUT,timeout=650);rc=p.returncode
+   except subprocess.TimeoutExpired:rc=124
+   f.flush()
+   if rc==0:break
+   text=log.read_text()
+   if phase=='offline' or attempt==2 or not re.search(r'Failed to connect|Connection reset|Connection timed out|HTTP Error (429|500|502|503|504)|502 Bad Gateway|503 Service',text,re.I):break
+   f.write('RETRY_EVIDENCED_TRANSPORT_ONCE\n');f.flush()
+ record={'phase':phase,'component':mod,'exit':rc,'seconds':round(time.monotonic()-start,2),'sha256':hashlib.sha256(log.read_bytes()).hexdigest(),'log':str(log)};records.append(record);print(json.dumps(record),flush=True)
+ if rc:print(log.read_text()[-5000:],flush=True)
+(out/(phase+'-results.json')).write_text(json.dumps(records,indent=2))
+assert all(r['exit']==0 for r in records),'Native dependency preparation or consumer verification failed'
+print('BATCHED_NATIVE_CLOSURE_PASSED',phase,flush=True)
+PYPREP
+cp /tmp/gym-closure-prepare.py preparation/closure/probe.py
+export RUNNER_TEMP=/tmp/closure-runner GITHUB_ENV=/tmp/closure-runner/github-env
+mkdir -p "$RUNNER_TEMP"; touch "$GITHUB_ENV"
+export GYM_CI_DEV_VENV_DIR=/tmp/gym-closure-envs/.driver-venv
+source scripts/ci/setup_dev.sh
+python -u /tmp/gym-closure-prepare.py online
+rm -rf /tmp/gym-closure-envs /tmp/closure-runner /tmp/gym-closure-prepare.py
+SH
+# Verify fresh native bootstraps against retained image inputs without egress.
+RUN --network=none <<'SH'
+umask 0022
+export UV_OFFLINE=1 UV_NO_SYNC=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 npm_config_offline=true
+export RUNNER_TEMP=/tmp/closure-offline-runner GITHUB_ENV=/tmp/closure-offline-runner/github-env
+mkdir -p "$RUNNER_TEMP"; touch "$GITHUB_ENV"
+export GYM_CI_DEV_VENV_DIR=/tmp/gym-closure-envs/.driver-venv
+source scripts/ci/setup_dev.sh
+python -u preparation/closure/probe.py offline
+python -u - <<'PYWRITE'
+import os,pathlib,tempfile
+assert os.getuid()==65532
+for s in ('/home/nemo-runtime','/opt/nemo-gym/cache/uv','/opt/nemo-gym/preparation','/opt/nemo_gym_venv'):
+ p=pathlib.Path(s)
+ with tempfile.NamedTemporaryFile(dir=p) as f:f.write(b'runtime-user-write');f.flush();os.fsync(f.fileno())
+print('RUNTIME_UID_AND_WRITABLE_ROOTS_PASSED',flush=True)
+PYWRITE
+rm -rf /tmp/gym-closure-envs /tmp/closure-offline-runner
+SH
+# Preserve inherited quarantine default; managed jobs run as UID 65532.
+USER root
+ENV UV_OFFLINE=1 UV_NO_SYNC=1
