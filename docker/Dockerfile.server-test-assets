@@ -136,6 +136,12 @@ records=[]
 def execute(mod, code):
  index=components.index(mod);log=out/(mod.replace('/','__')+'.log');begin=time.monotonic();rc=0
  env=os.environ|{'PYTHONPATH':str(root/mod)+os.pathsep+str(root),'NEMO_GYM_EXTRA_ROOTS':str(root),'PATH':str(pathlib.Path.home()/'.local/bin')+os.pathsep+os.environ['PATH']}
+ if mod=='resources_servers/chemcotbench':
+  # Native MolOpt needs Python 3.11; the inherited /opt/uv/python is root-owned.
+  # Use uv's ordinary writable managed-interpreter hook, preserving its pin.
+  python_root=pathlib.Path.home()/'.local/share/uv/python';python_root.mkdir(parents=True,exist_ok=True)
+  env['UV_PYTHON_INSTALL_DIR']=str(python_root)
+ print(json.dumps({'stage':'native-asset-start','component':mod,'managed_python_root':env.get('UV_PYTHON_INSTALL_DIR'),'log':str(log)}),flush=True)
  # Only retry evidenced transport failures; retain successes and full component logs.
  with log.open('w') as f:
   for attempt in (1,2):
@@ -152,8 +158,13 @@ def execute(mod, code):
  record={'component':mod,'exit':rc,'seconds':round(time.monotonic()-begin,2),'log':str(log),'sha256':hashlib.sha256(log.read_bytes()).hexdigest()};print(json.dumps(record),flush=True)
  if rc:print(log.read_text()[-3500:],flush=True)
  return record
+# Recheck the exact previously failing native chemistry preparation before the batch.
+chemistry=execute('resources_servers/chemcotbench',programs['resources_servers/chemcotbench'])
+records.append(chemistry)
+(out/'chemistry-preflight.json').write_text(json.dumps(chemistry,indent=2))
+assert chemistry['exit']==0, 'Native chemistry preparation still fails; do not repeat the successful asset batch'
 # Run dependency-independent consumers in two workers, then those that use seeded NLTK.
-first=['resources_servers/rolemrc','resources_servers/arena','resources_servers/genrm_eval','resources_servers/wmt_translation','resources_servers/interactive_browser','resources_servers/mimo_music','responses_api_agents/codex_agent','resources_servers/chemcotbench','responses_api_agents/rna_design_agent','resources_servers/newton_bench','resources_servers/ether0']
+first=['resources_servers/rolemrc','resources_servers/arena','resources_servers/genrm_eval','resources_servers/wmt_translation','resources_servers/interactive_browser','resources_servers/mimo_music','responses_api_agents/codex_agent','responses_api_agents/rna_design_agent','resources_servers/newton_bench','resources_servers/ether0']
 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:records.extend(ex.map(lambda m:execute(m,programs[m]),first))
 for mod in ['resources_servers/instruction_following','resources_servers/ifbench']:records.append(execute(mod,programs[mod]))
 (out/'results.json').write_text(json.dumps(records,indent=2))
