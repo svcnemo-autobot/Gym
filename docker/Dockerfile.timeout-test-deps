@@ -1,0 +1,239 @@
+# syntax=docker/dockerfile:1
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Runtime-only extension; not part of the product PR.
+# Source inputs at c442d05689f7b3ef7429014cf484b86f898f6a77:
+# 100644 blob 09763b1e23e72aa9ca50ba1be471e0576b4c5dee	docker/Dockerfile
+# 100644 blob 92ada699ea7473387a59d8960177813a7af86e72	environment_servers/harbor/pyproject.toml
+# 100644 blob efb00dc54dc3daa8c5ac99f65add3da5e1a009fb	environment_servers/harbor/tests/conftest.py
+# 100644 blob 0dc1dcfe1c5e8b4fce2ecee0cb9bd47d01913291	environment_servers/harbor/uv.lock
+# 100644 blob b2551aa32b818f7e13ac3c38a8e43515964c5836	nemo_gym/cli/_locked_env.py
+# 100644 blob a29b93b067b94ddca202555e8b65278a0213ffee	nemo_gym/cli/env.py
+# 100644 blob 7e92e7f39d9ba6175d0393a4371bee10ce90938f	nemo_gym/orchestration/server_venv.py
+# 100644 blob 4432400529e663b539e22fdf264ff8b74a5ccfb7	pyproject.toml
+# 100644 blob 33f3332cdf77a7b320d38ea2d975d2c1824e737b	resources_servers/aegis_v4_safety/pyproject.toml
+# 100644 blob 32662310f017a811d2e5346dc709f0dccb99f77b	resources_servers/aegis_v4_safety/uv.lock
+# 100644 blob 541ad266ec4abb27d1560ba9e5a3070b79c5fcfe	resources_servers/arena_judge/pyproject.toml
+# 100644 blob b59cce7eb861a8f8a16db229360fd17356d4938e	resources_servers/arena_judge/uv.lock
+# 100644 blob e6a684a5389f02e62cf82206294e8d1e5eb55d18	resources_servers/bird_sql/pyproject.toml
+# 100644 blob 8249929e7413e49d60830062260154e387e8c6d3	resources_servers/bird_sql/uv.lock
+# 100644 blob 6a2ac39c4ce8566776904af309eb3dcf9cf85340	resources_servers/chemreason_bench/pyproject.toml
+# 100644 blob be6c12d84287c391db71aeebb7e4d4e3d0f50e88	resources_servers/chemreason_bench/uv.lock
+# 100644 blob 933af455b9101c006f869f68f42b190a268e0a8a	resources_servers/critpt/pyproject.toml
+# 100644 blob 1642964c99951ba0d8f643f761124917182cbb6d	resources_servers/critpt/uv.lock
+# 100644 blob c061bcd9640554795cce087876f81da86d22dfb4	resources_servers/equivalence_llm_judge/pyproject.toml
+# 100644 blob 888a8d5feefb63a706674778a9a0efc81471c898	resources_servers/equivalence_llm_judge/uv.lock
+# 100644 blob eb6b1e065c29762dd376645d79a0a238b3d72bcc	resources_servers/example_single_tool_call/pyproject.toml
+# 100644 blob 02e9066a0ab0d3b7dc7d2a465266805a6b967a61	resources_servers/example_single_tool_call/uv.lock
+# 100644 blob 697bb1435c2577ad4832111d560dc64ab39c8fda	resources_servers/fukuyamabench/pyproject.toml
+# 100644 blob 4d0ab01ff3fb875aae5ae44234783ecdd454b452	resources_servers/fukuyamabench/uv.lock
+# 100644 blob 3c574b2c820c0404424dd4c57192b39eca33b373	resources_servers/graphwalks/pyproject.toml
+# 100644 blob 8b9955c6814618f57e21a620ecc1a2e6e1b4f3cf	resources_servers/graphwalks/uv.lock
+# 100644 blob 9f44f2f315cbb333b8b8dd4aaa76a3dcb5ef342e	resources_servers/image_tools/pyproject.toml
+# 100644 blob 153efaadf75ac75a4134258ccc03519ec21ef343	resources_servers/image_tools/uv.lock
+# 100644 blob 03258759438cfef257d5827a4a362f9444207d23	resources_servers/jailbreak_detection/pyproject.toml
+# 100644 blob ce95729b63965a17bd972e012cceff65e65dcc8a	resources_servers/jailbreak_detection/uv.lock
+# 100644 blob 5a0d1db9291bebb5b2676e66559e1017f2d42eed	resources_servers/longmt_eval/pyproject.toml
+# 100644 blob ff76b6caaff1b4e648d2225c40bfe6c101c702d7	resources_servers/longmt_eval/uv.lock
+# 100644 blob 0e8320c9e0334338f9d2c22c5ccd61632b9632ae	resources_servers/mimo_music/pyproject.toml
+# 100644 blob 8884ab15dce600b32ddc8f995845c6ee2c8bb689	resources_servers/mimo_music/setup_abc2midi.py
+# 100644 blob 628435f87a4d2b2fd9e0831127c54127a012922f	resources_servers/mimo_music/tests/conftest.py
+# 100644 blob 27b96a0a887034b617ec15359b082fc78b8efb73	resources_servers/mimo_music/uv.lock
+# 100644 blob 7e64332f45516b935365d225874d26d65c6142e3	resources_servers/nvarc/pyproject.toml
+# 100644 blob acb712e6edf55727d646dbb1bd360828d6be88ca	resources_servers/nvarc/uv.lock
+# 100644 blob 08f61198428b6819a3a8e3de8dd81e0acba93b3d	resources_servers/over_refusal_detection/pyproject.toml
+# 100644 blob cdfe1f9e74b97704e5cb05e4a0481129c327d045	resources_servers/over_refusal_detection/uv.lock
+# 100644 blob 5641b464446ad482d90df14e1887f74c3306b2aa	resources_servers/r2e_gym/pyproject.toml
+# 100644 blob 6d415426b799afec7f70aecd12913ad7f601ae87	resources_servers/r2e_gym/uv.lock
+# 100644 blob cf23426a2f37910f6e62acae0b5e27e55dc415f3	resources_servers/scale_swe/pyproject.toml
+# 100644 blob 0773e690aef1c7ec00e304cd62badaf9c4f34e97	resources_servers/scale_swe/uv.lock
+# 100644 blob acc20a9eef362b3f28eda1722dad31eee28661f5	resources_servers/speed_bench/pyproject.toml
+# 100644 blob a0bd9d1f5113e5b1bcc6be5af7679513d970db79	resources_servers/speed_bench/uv.lock
+# 100644 blob 363db074121cbe6b92f2985a6f796b899915dedc	resources_servers/swe_next/pyproject.toml
+# 100644 blob 44a8e4ccf27fc38de6d2e9f66d9ca3ee2a1ff725	resources_servers/swe_next/uv.lock
+# 100644 blob 6c081dd3213070a78191dd7043ce8fe3207c387e	resources_servers/swemer_v2/pyproject.toml
+# 100644 blob ab3fee9dc364c790d74ee8277f774bfaf44a4246	resources_servers/swemer_v2/uv.lock
+# 100644 blob 190ab36d633eb3535c74ffa2e6febdc0f1d1dc87	resources_servers/terminus_judge/pyproject.toml
+# 100644 blob d36871a09a743784016bb96b32322eaca9ef88f0	resources_servers/terminus_judge/uv.lock
+# 100644 blob d51128032c5a17ac16158abd4b3496a719a3a226	resources_servers/widesearch/pyproject.toml
+# 100644 blob c7dde75ca2f7df26daedeff1edd49c8bd212305a	resources_servers/widesearch/uv.lock
+# 100644 blob e0e38a542799b7ae01539c2aab30a97c6347cb4d	responses_api_agents/agentic_turn_simulation_agent/pyproject.toml
+# 100644 blob f2355b9025bd386cf46b8d0529d17be1dfce62f4	responses_api_agents/agentic_turn_simulation_agent/uv.lock
+# 100644 blob 46f20f31cd5cd17985fdafd41d4eb554f8e5935f	responses_api_agents/conversational_tool_use_domain_generation/pyproject.toml
+# 100644 blob 30f804167cf5e85822c572cf45b7af0e08275d70	responses_api_agents/conversational_tool_use_domain_generation/tests/conftest.py
+# 100644 blob 8acd600f6bcab3c5c7a04503b132a92b75604dcd	responses_api_agents/conversational_tool_use_domain_generation/uv.lock
+# 100644 blob d71af8bdb8b1ca9e1dfe2889519ec62a771e0462	responses_api_agents/gymnasium_agent/pyproject.toml
+# 100644 blob 948972ad3e597fd9ffc0db7158f0529038ebd589	responses_api_agents/gymnasium_agent/uv.lock
+# 100644 blob f3390825a96bd9211cbf769c8d5d5dd949079a5a	responses_api_agents/hermes_sandboxed_agent/pyproject.toml
+# 100644 blob 8e8803ec250ee965177d8bd9152fffee0ea07cb6	responses_api_agents/hermes_sandboxed_agent/uv.lock
+# 100644 blob 447dab62a843b60f973267a15057e0fab907cb36	responses_api_agents/miniswe_sandboxed_agent/pyproject.toml
+# 100644 blob 31efc0af7ffabce2beaf7aeec81ca8102e27a884	responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
+# 100644 blob fc1c7da5f9daf387363dc45bf075487fd5c4d0fe	responses_api_agents/miniswe_sandboxed_agent/tests/conftest.py
+# 100644 blob 6b9553336fbce0bf25b2e7632982fcd77dffff91	responses_api_agents/miniswe_sandboxed_agent/uv.lock
+# 100644 blob 7ed11ff4a0da549513e29daa713fa3ec4958edda	responses_api_agents/partner_if_dispatcher/pyproject.toml
+# 100644 blob 18b40e03f1755b4bd460dfdb2a3296d4beaec95b	responses_api_agents/partner_if_dispatcher/uv.lock
+# 100644 blob 071458b1e00eaecee04d5c9203d247f1d8dd5906	responses_api_agents/rna_design_agent/prepare.py
+# 100644 blob 19153720e4e4708980837e906fe6b558cbc92261	responses_api_agents/rna_design_agent/pyproject.toml
+# 100644 blob 9e2ed2fe934c0c418a1cf9a3570c63f7e52f1810	responses_api_agents/rna_design_agent/setup_eternafold.py
+# 100644 blob b4550d7f9d116bf9ddf33dc7df7a9ccb07ca349f	responses_api_agents/rna_design_agent/tests/conftest.py
+# 100644 blob 6942ef7e50ded516931145fa38e0313fd3028456	responses_api_agents/rna_design_agent/uv.lock
+# 100644 blob 1ddd6618c79014d9ded0072f5cbffed9e7f79f84	responses_api_agents/tau2/pyproject.toml
+# 100644 blob e74ade7af8b1e05637ac370bf35fe2179e1a8bda	responses_api_agents/tau2/uv.lock
+# 100644 blob 88f8d2bfb6b26e7b624774bfd83543345c387432	responses_api_models/agentic_if_text/pyproject.toml
+# 100644 blob 5b0bb2c53e67a62a1996728a5eca204a0f4c03c4	responses_api_models/agentic_if_text/uv.lock
+# 100644 blob 679fee107eeccc09ad6bfb8962b9259197a98d35	responses_api_models/switchyard_model/pyproject.toml
+# 100644 blob 13bc6ca3c1c48ffc1aecc3505ead8848023a89e5	responses_api_models/switchyard_model/uv.lock
+# 100755 blob ae3f0c298a0c6eec1befbaea0a0b3a43be50498d	scripts/ci/sanitize_env.sh
+# 100755 blob 741add872394adf27e25755b0ef716c11a7ab3d2	scripts/ci/server_tests.sh
+# 100755 blob 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da	scripts/ci/setup_dev.sh
+# 100644 blob dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1	uv.lock
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:8fe0cbadc0490d796139a37a67e0d59c12f64c72f68cbc4ed27854eaf23ecefc
+USER 65532:65532
+WORKDIR /opt/nemo-gym
+ENV UV_DEFAULT_INDEX=https://pypi.org/simple
+# Populate index metadata via the native configured-index installation branch.
+# Retain the original locked requirements, build isolation and parent checks.
+RUN <<'SHELL'
+set -eu
+export HOME=/home/nemo-runtime UV_HTTP_TIMEOUT=120 UV_HTTP_RETRIES=3
+python -u - <<'PYTHON'
+import os, shutil, subprocess, tempfile, time
+from pathlib import Path
+from nemo_gym.cli.env import TestConfig, _setup_single, get_global_config_dict
+roots=['environment_servers','resources_servers','responses_api_agents','responses_api_models']
+components=sorted(str(p) for root in roots for p in Path(root).iterdir() if p.is_dir() and (p/'README.md').is_file())[0::8]
+assert len(components)==33
+cfg=get_global_config_dict()
+cfg.uv_cache_dir=os.environ['UV_CACHE_DIR']
+def prepare(component):
+ for attempt in range(1,3):
+  with tempfile.TemporaryFile(mode='w+') as log:
+   saved=[os.dup(1),os.dup(2)]
+   try:
+    os.dup2(log.fileno(),1);os.dup2(log.fileno(),2)
+    process=_setup_single(TestConfig(entrypoint=component),cfg)
+    result=process.wait(timeout=900)
+   finally:
+    for fd,original in enumerate(saved,1): os.dup2(original,fd);os.close(original)
+   log.seek(0);text=log.read()
+  print(f'NATIVE_SETUP {component} attempt={attempt} exit={result}',flush=True)
+  if not result: return
+  print('\n'.join(text.splitlines()[-70:]),flush=True)
+  transient=any(marker in text.lower() for marker in ['timed out','connection reset','connection refused','temporary failure','http 429','http 502','http 503','http 504','remote end hung up','tls connection was non-properly terminated'])
+  if attempt==2 or not transient: raise RuntimeError(f'Native setup failed: {component}: {result}')
+  time.sleep(2)
+with tempfile.TemporaryDirectory(prefix='gym-prep-') as directory:
+ cfg.uv_venv_dir=directory
+ for component in components:
+  print('PREPARE',component,flush=True)
+  prepare(component)
+  shutil.rmtree(Path(directory)/component,ignore_errors=True)
+ runtime=Path(directory)/'miniswe-native'
+ subprocess.run(['uv','--no-config','venv',str(runtime),'--python',__import__('sys').executable],check=True)
+ subprocess.run(['uv','--no-config','pip','install','--python',str(runtime/'bin/python'),'-r','responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt'],check=True)
+ subprocess.run([str(runtime/'bin/python'),'-c','import minisweagent,litellm,mcp; import importlib.metadata as m; assert m.version("mini-swe-agent")=="2.4.6"; assert m.version("litellm")=="1.106.0"; assert m.version("mcp")=="2.2.0"'],check=True)
+print('NATIVE_COMPONENT_AND_MINISWE_SEED_OK',flush=True)
+PYTHON
+SHELL
+# Native pinned music renderer. Its checksum and version probes stay unchanged.
+RUN <<'SHELL'
+set -eu
+export HOME=/home/nemo-runtime
+python -u - <<'PYTHON'
+import time,urllib.error
+from resources_servers.mimo_music.setup_abc2midi import ensure_abc2midi
+for attempt in range(2):
+ try:
+  print(ensure_abc2midi());break
+ except (TimeoutError,urllib.error.URLError) as error:
+  if isinstance(error,urllib.error.HTTPError) and error.code not in (429,500,502,503,504): raise
+  if attempt: raise
+  print('Transient abcMIDI acquisition failure:',error,flush=True);time.sleep(2)
+PYTHON
+SHELL
+# Pin the native EternaFold source before invoking the unchanged builder.
+RUN <<'SHELL'
+set -eu
+export HOME=/home/nemo-runtime GIT_TERMINAL_PROMPT=0
+mkdir -p responses_api_agents/rna_design_agent/.eternafold/EternaFold
+git -C responses_api_agents/rna_design_agent/.eternafold/EternaFold init -q
+for attempt in 1 2; do
+    if timeout 180 git -C responses_api_agents/rna_design_agent/.eternafold/EternaFold fetch --depth=1 https://github.com/eternagame/EternaFold.git 87b9aac55cee14fd562049d08f7b92d3131f10ce > /tmp/eterna-fetch.log 2>&1; then
+        cat /tmp/eterna-fetch.log; break
+    fi
+    cat /tmp/eterna-fetch.log
+    test "$attempt" = 1
+    grep -Eiq 'timed out|connection reset|HTTP (429|50[234])|TLS|remote end hung up' /tmp/eterna-fetch.log
+    sleep 2
+done
+rm /tmp/eterna-fetch.log
+git -C responses_api_agents/rna_design_agent/.eternafold/EternaFold checkout --detach FETCH_HEAD
+test "$(git -C responses_api_agents/rna_design_agent/.eternafold/EternaFold rev-parse HEAD)" = 87b9aac55cee14fd562049d08f7b92d3131f10ce
+python -u - <<'PYTHON'
+from responses_api_agents.rna_design_agent.setup_eternafold import ensure_eternafold
+print(ensure_eternafold())
+PYTHON
+SHELL
+ENV ARNIEFILE=/opt/nemo-gym/responses_api_agents/rna_design_agent/.eternafold/arniefile.txt
+ENV PATH=/opt/nemo-gym/resources_servers/mimo_music/.abcmidi/bin:${PATH}
+# Prepare the checksum-verified benchmark fixtures in their native source location.
+RUN <<'SHELL'
+set -eu
+export HOME=/home/nemo-runtime
+python -u - <<'PYTHON'
+import os,subprocess,tempfile
+from pathlib import Path
+from nemo_gym.cli.env import TestConfig,_setup_single,get_global_config_dict
+from nemo_gym.orchestration.server_venv import get_venv_path
+cfg=get_global_config_dict(); cfg.uv_cache_dir=os.environ['UV_CACHE_DIR']
+with tempfile.TemporaryDirectory(prefix='gym-rna-') as directory:
+ cfg.uv_venv_dir=directory
+ component=Path('responses_api_agents/rna_design_agent')
+ if _setup_single(TestConfig(entrypoint=str(component)),cfg).wait(timeout=900):
+  raise RuntimeError('RNA native setup failed')
+ python=get_venv_path(component.resolve(),cfg)/'bin/python'
+ code='''import time,urllib.error
+from prepare import ensure_suites
+for attempt in range(2):
+ try:
+  ensure_suites();break
+ except (TimeoutError,urllib.error.URLError) as error:
+  if isinstance(error,urllib.error.HTTPError) and error.code not in (429,500,502,503,504): raise
+  if attempt: raise
+  print('Transient RNAInvBench acquisition failure:',error,flush=True);time.sleep(2)
+from rds.tools.fold import fold_eternafold,EternaFoldIn
+result=fold_eternafold(EternaFoldIn(sequences=['GGGAAACCC']))
+assert result['n']==1
+print('RNA_ASSET_CONSUMER_OK',result)'''
+ subprocess.run([str(python),'-u','-c',code],cwd=component,check=True)
+assert len(list((component/'suites').glob('rnainvbench_*.yaml')))==8
+PYTHON
+SHELL
+# Offline, fresh-process installation probes under the intended runtime identity.
+RUN <<'SHELL'
+set -eu
+export HOME=/home/nemo-runtime UV_OFFLINE=1
+python -u - <<'PYTHON'
+import os,shutil,subprocess,tempfile,sys
+from pathlib import Path
+from nemo_gym.cli.env import TestConfig,_setup_single,get_global_config_dict
+roots=['environment_servers','resources_servers','responses_api_agents','responses_api_models']
+components=sorted(str(p) for root in roots for p in Path(root).iterdir() if p.is_dir() and (p/'README.md').is_file())[0::8]
+cfg=get_global_config_dict();cfg.uv_cache_dir=os.environ['UV_CACHE_DIR']
+with tempfile.TemporaryDirectory(prefix='gym-offline-') as directory:
+ cfg.uv_venv_dir=directory
+ for component in components:
+  print('OFFLINE_SETUP',component,flush=True)
+  rc=_setup_single(TestConfig(entrypoint=component),cfg).wait(timeout=900)
+  if rc: raise RuntimeError(f'Offline native setup failed {component}: {rc}')
+  shutil.rmtree(Path(directory)/component,ignore_errors=True)
+ runtime=Path(directory)/'miniswe-native'
+ subprocess.run(['uv','--no-config','venv',str(runtime),'--python',sys.executable],check=True)
+ subprocess.run(['uv','--no-config','pip','install','--python',str(runtime/'bin/python'),'-r','responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt'],check=True)
+ subprocess.run([str(runtime/'bin/python'),'-c','import minisweagent,litellm,mcp'],check=True)
+print('OFFLINE_NATIVE_SETUP_OK',flush=True)
+PYTHON
+abc2midi -ver
+SHELL
+# The base contract deliberately publishes root; managed tests select UID 65532.
+USER root
