@@ -1,29 +1,27 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Runtime-only validation extension; excluded from the product PR.
-# Native inputs at c442d05689f7b3ef7429014cf484b86f898f6a77:
-# pyproject.toml 4432400529e663b539e22fdf264ff8b74a5ccfb7
-# uv.lock dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1
-# .python-version 0cf960df58f3c12fadffb149e0ee06bb63111f41
-# scripts/ci/core_unit_tests.sh 8d19aa17c43ea1adfd2f23f6f6463ee0c388b19b
-# scripts/ci/setup_dev.sh 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da
-FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:1273aca5f51ab8961f59e429deab4da5e83ad36d9fc73a671a5a4b5a2522a45f
+# Runtime-only extension; excluded from the product PR.
+# Reuses the Session-owned core-extra cache; native inputs at c442d05689f7b3ef7429014cf484b86f898f6a77:
+# responses_api_agents/simple_agent/pyproject.toml 74e18f81ff2df0da673d4a37dfada03875c8fd6c
+# responses_api_agents/simple_agent/uv.lock 065a0d405d76cd517a5e7ffa82fc59f589a3872d
+# nemo_gym/cli/_locked_env.py b2551aa32b818f7e13ac3c38a8e43515964c5836
+# tests/unit_tests/cli/test_locked_env.py f5941cd791256d6e2a9420e0c77a5878122ef415
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:30f7b37766cc741174149fa8ec3ae0b95d1c326cca9d480ed8d6345e55e6cc6a
 USER 65532:65532
 WORKDIR /opt/nemo-gym
-# Seed the exact native core extras, including their build-isolation inputs, into
-# the persistent cache. The temporary environment is removed in this same layer.
-RUN HOME=/home/nemo-runtime UV_PROJECT_ENVIRONMENT=/tmp/gym-core-seed \
-    uv sync --locked --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb \
-    && rm -rf /tmp/gym-core-seed
-# A new offline environment must resolve and import the real consumers as the
-# runtime user, not merely find wheel files in a root-owned build cache.
-RUN HOME=/home/nemo-runtime UV_PROJECT_ENVIRONMENT=/tmp/gym-core-probe \
-    uv sync --offline --locked --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb \
-    && HOME=/home/nemo-runtime /tmp/gym-core-probe/bin/python -c \
-    'import aiohttp, mlflow, wandb, ray, nemo.lens; from nemo_gym.client.openai_client import NeMoGymAsyncOpenAI; from nemo_gym.core.failure_transport import RequestFailureLog; NeMoGymAsyncOpenAI(api_key="test", base_url="http://model.test")' \
+# Match the nested locked-component installer and its uv 0.13.4 seed path.
+# Preserve caches, but remove both temporary environments in this layer.
+RUN HOME=/home/nemo-runtime UV_PROJECT_ENVIRONMENT=/tmp/gym-component-seed \
+    uv sync --locked --project responses_api_agents/simple_agent --no-dev --inexact --extra telemetry \
+    && HOME=/home/nemo-runtime uv venv --seed --python /opt/nemo_gym_venv/bin/python /tmp/gym-pip-seed \
+    && rm -rf /tmp/gym-component-seed /tmp/gym-pip-seed
+# Prove both operations work offline as the managed runtime user.
+RUN HOME=/home/nemo-runtime UV_PROJECT_ENVIRONMENT=/tmp/gym-component-probe \
+    uv sync --offline --locked --project responses_api_agents/simple_agent --no-dev --inexact --extra telemetry \
+    && HOME=/home/nemo-runtime uv venv --offline --seed --python /opt/nemo_gym_venv/bin/python /tmp/gym-pip-probe \
+    && HOME=/home/nemo-runtime /tmp/gym-component-probe/bin/python -c \
+    'import pyarrow, aiohttp, nemo.lens; assert pyarrow.__version__ == "26.0.0"; from nemo_gym.cli._locked_env import sync_environment' \
+    && /tmp/gym-pip-probe/bin/python -m pip --version \
     && test -w /home/nemo-runtime && test -w /opt/nemo-gym/cache/uv \
-    && touch /opt/nemo-gym/cache/uv/.core-validation-write-probe \
-    && rm /opt/nemo-gym/cache/uv/.core-validation-write-probe \
-    && rm -rf /tmp/gym-core-probe
-# Preserve the published base's default user; the managed profile selects UID 65532.
+    && rm -rf /tmp/gym-component-probe /tmp/gym-pip-probe
 USER root
