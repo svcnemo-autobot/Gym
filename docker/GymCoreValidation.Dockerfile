@@ -13,7 +13,7 @@ USER 65532:65532
 WORKDIR /opt/nemo-gym
 # Populate the complete native mirror consumer, including compatibility resolution,
 # then repeat offline with a fresh venv and local primary endpoint. Keep only caches.
-RUN /opt/nemo_gym_venv/bin/python -u - <<'PY'
+RUN HOME=/home/nemo-runtime /opt/nemo_gym_venv/bin/python -u - <<'PY'
 import os
 import subprocess
 import sys
@@ -26,6 +26,10 @@ from threading import Thread
 from nemo_gym.cli._locked_env import INDEX_VARIABLES, sync_environment
 
 assert os.getuid() == 65532
+assert os.environ['HOME'] == '/home/nemo-runtime'
+assert os.environ['UV_CACHE_DIR'] == '/opt/nemo-gym/cache/uv'
+assert os.access(os.environ['UV_CACHE_DIR'], os.W_OK)
+print('runtime', os.getuid(), sys.executable, os.environ['HOME'], os.environ['UV_CACHE_DIR'], flush=True)
 project = Path.cwd() / 'responses_api_agents/simple_agent'
 lock = (project / 'uv.lock').read_bytes()
 for offline in (False, True):
