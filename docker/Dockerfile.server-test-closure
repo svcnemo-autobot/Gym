@@ -23,6 +23,32 @@ ENV npm_config_prefix=/home/nemo-runtime/.local npm_config_fetch_retries=2 npm_c
 RUN <<'SH'
 umask 0022
 mkdir -p preparation/closure
+# The asset image dereferenced Node's npm launchers during copytree.
+# Restore the installed distribution's own bin links; do not replace the CLI.
+python -u - <<'PYNPM'
+import json,os,pathlib,subprocess
+root=pathlib.Path.home()/'.local/node-22.15.0'
+pkg=root/'lib/node_modules/npm'
+meta=json.loads((pkg/'package.json').read_text())
+assert meta['name']=='npm' and meta['version']=='10.9.2'
+assert meta['bin']=={'npm':'bin/npm-cli.js','npx':'bin/npx-cli.js'}
+records=[]
+for name,relative in meta['bin'].items():
+ target=pkg/relative;entry=root/'bin'/name
+ assert target.is_file()
+ if entry.is_symlink():assert entry.resolve()==target
+ else:
+  assert entry.read_bytes()==target.read_bytes()
+  entry.unlink();entry.symlink_to(os.path.relpath(target,entry.parent))
+ assert entry.resolve()==target
+ records.append({'entry':str(entry),'link':os.readlink(entry)})
+for name,version in [('node','v22.15.0'),('npm','10.9.2'),('npx','10.9.2')]:
+ actual=subprocess.check_output([str(root/'bin'/name),'--version'],text=True,timeout=30).strip()
+ assert actual==version,(name,actual)
+subprocess.run([str(root/'bin/npm'),'install','--help'],stdout=subprocess.DEVNULL,check=True,timeout=30)
+pathlib.Path('preparation/closure/npm-layout.json').write_text(json.dumps(records,indent=2))
+print('NATIVE_NPM_LINKS_VERIFIED',flush=True)
+PYNPM
 python -u - <<'PYINPUTS'
 import hashlib,json,pathlib
 inputs = {'scripts/ci/setup_dev.sh': {'git_blob': '1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da', 'sha256': '3888f5aeb8c81895911d6794249c4afaf97a2a6f80fcd040e93f5e94c0da47d0'}, 'resources_servers/big_finance/app.py': {'git_blob': '70a36f50153b6b4fabdb18dce75b345d1769daa2', 'sha256': 'ad487344f13565788c19268c341d5fc42a78e2116dfd8c79d208be2710626fda'}, 'resources_servers/big_finance/pyproject.toml': {'git_blob': '9a2f767e99954eae82a8fa39a65f2acaa8ddb920', 'sha256': 'ff23c7194beb31b2d40c80d13a4eeee250de7ee55e2e555332ceaecb9a52efde'}, 'resources_servers/big_finance/uv.lock': {'git_blob': '2fbc86cbafe9c297c41e6e5fecbcd09fe00d8e7b', 'sha256': 'a5afa089eb02bba649e230e5e378f9147783cac10eda4a64263e910c183d6846'}, 'responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt': {'git_blob': '31efc0af7ffabce2beaf7aeec81ca8102e27a884', 'sha256': '659ada8dde5511133902d224272aa22debde2a177d665f8086cf001de33db60c'}, 'responses_api_agents/miniswe_sandboxed_agent/tests/conftest.py': {'git_blob': 'fc1c7da5f9daf387363dc45bf075487fd5c4d0fe', 'sha256': '4445e05467273bbc5057184e0e1dd4c574e7bbd81d32d52d83e8aae3cce3fb8a'}, 'responses_api_agents/miniswe_sandboxed_agent/tests/test_bootstrap.py': {'git_blob': '886f056c11a86e25b570d0750ace35839b17d4c8', 'sha256': '58dbd8e92ca41c874881a8b0f3673b065dd9ebb3502a862383760f37dd2ddc95'}, 'responses_api_agents/pi_agent/setup_pi.py': {'git_blob': '79b0d5e9081fbfe75332833e94e24e8cd4b207c1', 'sha256': 'ff37a92a0b317667a0353bd0a84b1a22dbefd41bec838853c7fae371d77d12b9'}, 'responses_api_agents/pi_agent/configs/pi_agent.yaml': {'git_blob': '74c8338711fc55d74934a2eb0a0dcf8a68488336', 'sha256': '075dea1788d1a5849b1c544a16256a7fda323c55f0a3adb1d06d4eb74d2a3184'}, 'responses_api_agents/pi_agent/uv.lock': {'git_blob': '278ae06314ee2065010ae109739b55075c597626', 'sha256': '67e3887d0d1e26b15a62e91aac1442710d54af1f129c39a08cba91eba22f09b9'}, 'responses_api_agents/anyterminal_agent/app.py': {'git_blob': 'a1b0307a8c3cae32958f8768fd3a52ad1f424401', 'sha256': '2bbc702542f586396b129867326852402a93960710be41ee90488b5c4bcae28d'}, 'responses_api_agents/anyterminal_agent/uv.lock': {'git_blob': '81816a94039f9be768f5382891be45e966b9b4d5', 'sha256': 'f9990eba322a1e3d9a36f980a2243d22d692255f9e3e2511dce8bfcb439910d9'}, 'nemo_gym/sandbox/providers/docker/provider.py': {'git_blob': '77ff4f60178c120625b3a46d804d836f4835b879', 'sha256': '04d7c2100455fd34d36a846f9191b0d7774663321b2c88c81220c8a228f6201a'}, 'resources_servers/chemcotbench/setup_upstream.py': {'git_blob': '8c8992a42d1a0f72aad5bc04b670e963505ce65c', 'sha256': '55e3d91bb20c66d454ae5ae317394885c50e4d9c0c99f47cd6effe6c962d39e0'}, 'resources_servers/chemcotbench/verifier_fixture.py': {'git_blob': '44fb209bb2b75276f3212aa5ab79619833410ee9', 'sha256': '6dfd18d3ac16c8aed69f047abdfec34cf0f5dfb2eec249d3e3e8e507643483b5'}, 'resources_servers/chemcotbench/uv.lock': {'git_blob': '39ea3668eb5380cf4d15797102a1ec5f56fb1c06', 'sha256': 'dc90e3dd2b162f1e6b43fde10cedb8c422c3807a393851c4cc97048c263cce28'}}
