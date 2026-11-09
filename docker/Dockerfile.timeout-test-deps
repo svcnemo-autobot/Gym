@@ -88,6 +88,11 @@
 # 100755 blob 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da	scripts/ci/setup_dev.sh
 # 100644 blob dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1	uv.lock
 FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:8fe0cbadc0490d796139a37a67e0d59c12f64c72f68cbc4ed27854eaf23ecefc
+# The base seeded this editable package as root. Setuptools must replace its
+# generated metadata as the test UID; leave source modes and dependency pins intact.
+USER root
+RUN test -d /opt/nemo-gym/responses_api_models/switchyard_model.egg-info && \
+    chown -R 65532:65532 /opt/nemo-gym/responses_api_models/switchyard_model.egg-info
 USER 65532:65532
 WORKDIR /opt/nemo-gym
 ENV UV_DEFAULT_INDEX=https://pypi.org/simple
@@ -124,7 +129,9 @@ def prepare(component):
   time.sleep(2)
 with tempfile.TemporaryDirectory(prefix='gym-prep-') as directory:
  cfg.uv_venv_dir=directory
- for component in components:
+ # Exercise the previously failing exact native setup before repeating the batch.
+ ordered=['responses_api_models/switchyard_model']+[p for p in components if p!='responses_api_models/switchyard_model']
+ for component in ordered:
   print('PREPARE',component,flush=True)
   prepare(component)
   shutil.rmtree(Path(directory)/component,ignore_errors=True)
