@@ -1,0 +1,168 @@
+# syntax=docker/dockerfile:1
+# Build-only runtime dependency extension; not part of the success.md PR.
+# Reuse the successful package seed unchanged. Native inputs remain at protected
+# main 72275b85d4d9203538c0627add9306c815adaf98.
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:53b561f21387f8882d88b5bab6ac54d88c76766db3db027cdba51d59824baa19 AS server-assets
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+USER 65532:65532
+ENV HOME=/home/nemo-runtime UV_LINK_MODE=copy UV_OFFLINE=0 UV_NO_SYNC=0
+ENV NLTK_DATA=/home/nemo-runtime/.cache/nltk_data TIKTOKEN_CACHE_DIR=/home/nemo-runtime/.cache/tiktoken SACREBLEU=/home/nemo-runtime/.sacrebleu
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/nemo-runtime/.cache/ms-playwright
+WORKDIR /opt/nemo-gym
+# Native setup inputs and source are inherited from the verified seed. Temporary
+# environments are created and removed in this layer; only cache/asset inputs stay.
+RUN <<'SH'
+umask 0022
+mkdir -p preparation/assets
+export RUNNER_TEMP=/tmp/asset-runner GITHUB_ENV=/tmp/asset-runner/github-env
+mkdir -p "$RUNNER_TEMP"; touch "$GITHUB_ENV"
+export GYM_CI_DEV_VENV_DIR=/tmp/gym-assets/.driver-venv
+source scripts/ci/setup_dev.sh
+python -u - <<'PYASSETS'
+import concurrent.futures, hashlib, json, os, pathlib, re, shutil, subprocess, sys, time
+root=pathlib.Path('/opt/nemo-gym'); out=root/'preparation/assets'
+components=sorted(str(p.relative_to(root)) for kind in ('resources_servers','responses_api_agents','responses_api_models','environment_servers') for p in (root/kind).iterdir() if p.is_dir() and (p/'README.md').is_file())
+# Consumers and native producers are derived from the selected server tests.
+programs={
+'resources_servers/rolemrc': r'''import os, pathlib, nltk, json, hashlib
+p=pathlib.Path(os.environ['NLTK_DATA']);p.mkdir(parents=True,exist_ok=True,mode=0o700);p.chmod(0o700)
+for name in ('wordnet','omw-1.4','punkt','punkt_tab','stopwords','averaged_perceptron_tagger_eng'):
+ assert nltk.download(name,download_dir=str(p),quiet=True,raise_on_error=True)
+# find() requires unpacked corpus directories in this native caller.
+import zipfile
+for name in ('wordnet','omw-1.4'):
+ z=p/'corpora'/f'{name}.zip'
+ if z.is_file() and not (p/'corpora'/name).exists():
+  with zipfile.ZipFile(z) as f:f.extractall(p/'corpora')
+for q in p.rglob('*'):q.chmod(0o700 if q.is_dir() else 0o600)
+from resources_servers.rolemrc.app import _compute_meteor
+from concurrent.futures import ThreadPoolExecutor
+pair=('The knight swiftly departed the castle and rode toward the northern hills.','The warrior quickly left the fortress and travelled to the northern mountains.')
+v=_compute_meteor(*pair);assert v>0
+with ThreadPoolExecutor(max_workers=8) as ex: assert list(ex.map(lambda _: _compute_meteor(*pair),range(80)))==[v]*80
+print('native METEOR and WordNet consumers passed',v)
+''',
+'resources_servers/arena': r'''import tiktoken,pathlib,os,hashlib,json
+x=tiktoken.encoding_for_model('gpt-4o');assert x.encode('offline consumer')
+p=pathlib.Path(os.environ['TIKTOKEN_CACHE_DIR']);print('tiktoken assets',[(q.name,hashlib.sha256(q.read_bytes()).hexdigest()) for q in p.iterdir() if q.is_file()])
+''',
+'resources_servers/genrm_eval': r'''import tiktoken
+assert tiktoken.encoding_for_model('gpt-4o').encode('offline consumer')
+''',
+'resources_servers/wmt_translation': r'''from sacrebleu.metrics import BLEU
+from sacrebleu.utils import SACREBLEU_DIR
+from pathlib import Path
+import hashlib
+v=BLEU(tokenize='flores200',effective_order=True).sentence_score('hello world',['hello world']).score;assert v>0
+print('native FLORES200 consumer',v,[(str(q),hashlib.sha256(q.read_bytes()).hexdigest()) for q in (Path(SACREBLEU_DIR)/'models').iterdir() if q.is_file()])
+''',
+'resources_servers/interactive_browser': r'''from resources_servers.interactive_browser.browser._chromium import ensure_chromium
+ensure_chromium()
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+ b=p.chromium.launch(headless=True,args=['--no-sandbox']);page=b.new_page();page.set_content('<title>offline</title>');assert page.title()=='offline';b.close()
+print('native Chromium launched')
+''',
+'resources_servers/mimo_music': r'''from resources_servers.mimo_music.setup_abc2midi import ensure_abc2midi
+from pathlib import Path
+import shutil
+p=Path(ensure_abc2midi());d=Path.home()/'.local/bin';d.mkdir(parents=True,exist_ok=True);shutil.copy2(p,d/'abc2midi')
+from resources_servers.mimo_music.score_worker import score_abc
+r=score_abc('X:1\nT:Smoke melody\nM:4/4\nL:1/8\nQ:1/4=100\nK:C\nC2 E2 G2 E2 | F2 A2 G4 | E2 D2 C2 D2 | E4 C4 |');assert 'reward' in r
+print('native music scoring',r)
+''',
+'responses_api_agents/codex_agent': r'''from responses_api_agents.codex_agent.setup_codex import ensure_node
+from pathlib import Path
+import subprocess,shutil,hashlib,urllib.request
+ensure_node();node=shutil.which('node');assert node and subprocess.check_output([node,'--version'],text=True).strip()=='v22.15.0'
+# Verify the native unchecksummed release against the publisher checksum list.
+u='https://nodejs.org/dist/v22.15.0/'
+with urllib.request.urlopen(u+'SHASUMS256.txt',timeout=60) as f: checks=f.read().decode()
+name='node-v22.15.0-linux-x64.tar.xz';expected=next(s.split()[0] for s in checks.splitlines() if s.endswith('  '+name))
+with urllib.request.urlopen(u+name,timeout=60) as f:data=f.read()
+assert hashlib.sha256(data).hexdigest()==expected
+print('Node publisher checksum',name,expected)
+node=Path(node);dest=Path.home()/'.local/node-22.15.0';shutil.copytree(node.parent.parent,dest,dirs_exist_ok=True)
+print(subprocess.check_output([str(dest/'bin/node'),'-e','process.stdout.write(String(6*7))'],text=True))
+''',
+'resources_servers/chemcotbench': r'''from resources_servers.chemcotbench.setup_upstream import ensure_repository,ensure_data
+from resources_servers.chemcotbench.setup_molopt import ensure_molopt_runtime
+from pathlib import Path
+import subprocess,json
+base=Path.home()/'.cache/gym-assets/chemcotbench';base.mkdir(parents=True,exist_ok=True)
+repo=ensure_repository(None);data=ensure_data(None);python,cache=ensure_molopt_runtime(None,str(base/'molopt'))
+print('native chemistry preparation',repo,data,python,cache)
+print('repo_sha',subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip())
+# Retain source/data paths for native supported test hooks, outside the candidate.
+(base/'paths.json').write_text(json.dumps({'repo':str(repo),'data':str(data),'python':str(python),'oracle':str(cache)}))
+''',
+'responses_api_agents/rna_design_agent': r'''from responses_api_agents.rna_design_agent.setup_eternafold import ensure_eternafold
+from responses_api_agents.rna_design_agent.prepare import ensure_suites
+from pathlib import Path
+import subprocess
+base=Path.home()/'.cache/gym-assets/eternafold';arnie=ensure_eternafold(base);ensure_suites()
+print('native RNA',arnie,subprocess.check_output(['git','-C',str(base/'EternaFold'),'rev-parse','HEAD'],text=True).strip())
+from arnie.mfe import mfe
+s=mfe('GGGAAACCC',package='eternafold');assert len(s)==9;print('real fold',s)
+''',
+'resources_servers/instruction_following': r'''from resources_servers.instruction_following.setup_indicifeval import load_harness
+from resources_servers.instruction_following.indicifeval import score_response
+from resources_servers.instruction_following.indicifeval_schema import LANGUAGES,IndicIFEvalMetadata
+load_harness()
+for lang in LANGUAGES:
+ vm=IndicIFEvalMetadata(language=lang,prompt='Title',instruction_id_list=['detectable_format:title','punctuation:no_comma'],kwargs=[{},{}]);r=score_response(vm,'<<शीर्षक>>\nउत्तर');assert r.inst_level_strict_acc==[True,True] and not r.instruction_errors;print('native Indic consumer',lang)
+from verifiable_instructions.instructions_util import count_sentences
+assert count_sentences('Hello world. Another sentence.')==2
+''',
+'resources_servers/ifbench': r'''from resources_servers.ifbench.setup_ifbench import ensure_ifbench
+ensure_ifbench()
+import instructions_registry,instructions_util,spacy
+assert instructions_registry.INSTRUCTION_DICT
+print('native IFBench',len(instructions_registry.INSTRUCTION_DICT),spacy.load('en_core_web_sm').meta['version'])
+''',
+'resources_servers/newton_bench': r'''from resources_servers.newton_bench.setup_newton_bench import ensure_newton_bench,NEWTON_BENCH_PATH
+import subprocess
+ensure_newton_bench();print('NewtonBench',subprocess.check_output(['git','-C',str(NEWTON_BENCH_PATH),'rev-parse','HEAD'],text=True).strip())
+import resources_servers.newton_bench.app
+''',
+'resources_servers/ether0': r'''from resources_servers.ether0.setup_ether0 import ensure_ether0,ETHER0_PATH
+import subprocess
+ensure_ether0();print('ether0',subprocess.check_output(['git','-C',str(ETHER0_PATH),'rev-parse','HEAD'],text=True).strip())
+import resources_servers.ether0.app
+'''
+}
+assert all(m in components for m in programs)
+records=[]
+def execute(mod, code):
+ index=components.index(mod);log=out/(mod.replace('/','__')+'.log');begin=time.monotonic();rc=0
+ env=os.environ|{'PYTHONPATH':str(root/mod)+os.pathsep+str(root),'NEMO_GYM_EXTRA_ROOTS':str(root),'PATH':str(pathlib.Path.home()/'.local/bin')+os.pathsep+os.environ['PATH']}
+ # Only retry evidenced transport failures; retain successes and full component logs.
+ with log.open('w') as f:
+  for attempt in (1,2):
+   try:
+    p=subprocess.run(['ng_test_all','+setup_only=true','+delete_venvs_after_each_test=false',f'+uv_cache_dir={os.environ["UV_CACHE_DIR"]}','+uv_venv_dir=/tmp/gym-assets',f'+num_shards={len(components)}',f'+shard_index={index}'],cwd=root,env=env,stdout=f,stderr=subprocess.STDOUT,timeout=300);rc=p.returncode
+    if rc==0:
+     p=subprocess.run([f'/tmp/gym-assets/{mod}/.venv/bin/python','-u','-c',code],cwd=root/mod,env=env,stdout=f,stderr=subprocess.STDOUT,timeout=900);rc=p.returncode
+   except subprocess.TimeoutExpired:rc=124
+   f.flush()
+   if rc==0:break
+   text=log.read_text()
+   if attempt==2 or not re.search(r'Failed to connect|Connection reset|Connection timed out|timed out|HTTP Error (429|500|502|503|504)|502 Bad Gateway|503 Service',text,re.I):break
+   f.write('RETRY_TRANSPORT_ONCE\n');f.flush()
+ record={'component':mod,'exit':rc,'seconds':round(time.monotonic()-begin,2),'log':str(log),'sha256':hashlib.sha256(log.read_bytes()).hexdigest()};print(json.dumps(record),flush=True)
+ if rc:print(log.read_text()[-3500:],flush=True)
+ return record
+# Run dependency-independent consumers in two workers, then those that use seeded NLTK.
+first=['resources_servers/rolemrc','resources_servers/arena','resources_servers/genrm_eval','resources_servers/wmt_translation','resources_servers/interactive_browser','resources_servers/mimo_music','responses_api_agents/codex_agent','resources_servers/chemcotbench','responses_api_agents/rna_design_agent','resources_servers/newton_bench','resources_servers/ether0']
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:records.extend(ex.map(lambda m:execute(m,programs[m]),first))
+for mod in ['resources_servers/instruction_following','resources_servers/ifbench']:records.append(execute(mod,programs[mod]))
+(out/'results.json').write_text(json.dumps(records,indent=2))
+assert all(r['exit']==0 for r in records), 'Native asset preparation failed; retain successful inputs and diagnostics'
+print('BATCHED_NATIVE_ASSET_PREPARATION_PASSED',flush=True)
+PYASSETS
+rm -rf /tmp/gym-assets /tmp/asset-runner
+SH
+# Root remains the base's default; the managed job drops to runtime UID 65532.
+USER root
+ENV UV_OFFLINE=1 UV_NO_SYNC=1
+ENV PATH=/home/nemo-runtime/.local/node-22.15.0/bin:/home/nemo-runtime/.local/bin:${PATH}
