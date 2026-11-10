@@ -1,142 +1,122 @@
+# syntax=docker/dockerfile:1
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Runtime-only dependency cache; not part of the product PR.
-# Native setup inputs at f49b582a10321a8e9277bfdf9fe781bead47c73c:
-# pyproject.toml 4432400529e663b539e22fdf264ff8b74a5ccfb7
-# uv.lock dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1
-# .python-version 0cf960df58f3c12fadffb149e0ee06bb63111f41
-# scripts/ci/setup_dev.sh 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da
-# nemo_gym/cli/env.py a29b93b067b94ddca202555e8b65278a0213ffee
-# nemo_gym/cli/_locked_env.py b2551aa32b818f7e13ac3c38a8e43515964c5836
-# nemo_gym/orchestration/server_venv.py 7e92e7f39d9ba6175d0393a4371bee10ce90938f
-# environment_servers/nemo_user_sim/pyproject.toml 7e315864329a1869b5c0c09a01975ffce09c3a74
-# environment_servers/nemo_user_sim/uv.lock e4c62b4ae459fd1c379ffee78267afcb4325ffc8
-# resources_servers/circle_count/pyproject.toml f0bf3205ba287c4677e1579ed17ae7fada017ace
-# resources_servers/circle_count/uv.lock 64cef2479779018e1b4efa2350efd19a417f5db7
-# resources_servers/gdpval/pyproject.toml 8eb149cba99ab7f1ea0211e6d8170209c85d3237
-# resources_servers/gdpval/uv.lock 9b9d2f628c3fed45510682b701102c141ccda119
-# resources_servers/math_formal_lean/pyproject.toml c2a093187bf48303b4acc9e00476c2691707fcbc
-# resources_servers/math_formal_lean/uv.lock 03ba22792fc3a3cc6bb17e3f65a501e8bcd99093
-# resources_servers/reasoning_gym/pyproject.toml 710487e9ba537b8d961791fdb7145a3aa87d7c14
-# resources_servers/reasoning_gym/uv.lock b43198c36ed0b3986e55cdf110dc90105b963e9b
-# resources_servers/swerl_llm_judge/pyproject.toml bc33cff78f22008ac354fc944fee6441c597c8c7
-# resources_servers/swerl_llm_judge/uv.lock 8ccf0346cfbf84cf9fbf4d637cbf200984eda439
-# responses_api_agents/conversational_tool_use_scenario_generation/pyproject.toml 3d51974f21170e13781d7389346191e42743ecc5
-# responses_api_agents/conversational_tool_use_scenario_generation/uv.lock 29dfa3a5dae2193b062bd832e2dfe94027ce3776
-# responses_api_agents/pi_sandboxed_agent/pyproject.toml 9a3073db1e98cf84c798c8d244f92d198e5382e3
-# responses_api_agents/pi_sandboxed_agent/uv.lock 6a1bc2a9f2371ad72cbe4b6b286feb1c42262fd0
-# responses_api_models/vllm_model_with_compaction/pyproject.toml 7b8e4833726671f104e60e658c7cfb2fef3d1d21
-# responses_api_models/vllm_model_with_compaction/uv.lock fcb364ccbd0b635c905cfc39859c97c52e55fc21
-# resources_servers/agentic_if_realworld/pyproject.toml 99ef6fbd0b602f816f0c9a75bd841fe951960cc9
-# resources_servers/agentic_if_realworld/uv.lock dc32674e0ebc9b195b90f4691428fbe158ab21b9
-# resources_servers/cvdp/pyproject.toml c4157ee935d891ae9e5c0b0cfc76a23ed7dd2805
-# resources_servers/cvdp/uv.lock a79dc36c961315901c5d6ab417dd54cc2fb95d1e
-# resources_servers/grl_tetris/pyproject.toml 60ad90556fdd2df43909722d450b6573d959908d
-# resources_servers/grl_tetris/uv.lock a7364269a145dc9495b1bc5ffbdb7d4c3fb2a2e1
-# resources_servers/mrcr/pyproject.toml fc6d3c4ada1c3ffc553780833c36d11c89f26dfe
-# resources_servers/mrcr/uv.lock 0d1b2862b248a1473d6ce319921bfcefa076284d
-# resources_servers/scicodepile/pyproject.toml 4a57dd8e19ddcba42df5d44f159d7798b43d3db1
-# resources_servers/scicodepile/uv.lock e24872ac2dc0288d18833268b1b170e29a954a2f
-# resources_servers/toolsandbox/pyproject.toml df5164ef7c1536bd42103bb6fbe607b0aa4fa9ea
-# resources_servers/toolsandbox/uv.lock 3a60ad5e0873d38fe2894392dd18affec4e88259
-# responses_api_agents/harbor_agent_general/pyproject.toml 7576fb908d92a4281f4dc3b4b1abfc0a81559911
-# responses_api_agents/harbor_agent_general/uv.lock 87daa637631168ff4d8458fce1ad5c40f25922c9
-# responses_api_agents/simple_agent/pyproject.toml 74e18f81ff2df0da673d4a37dfada03875c8fd6c
-# responses_api_agents/simple_agent/uv.lock 065a0d405d76cd517a5e7ffa82fc59f589a3872d
-# resources_servers/assaybench/pyproject.toml f7793e1b10a8d6834ce6f6635b484cfa0e27db30
-# resources_servers/assaybench/uv.lock 23ddd0ff527354d4ca175be9a582909d83459263
+# Runtime-only prerequisite extension; not part of the product PR.
+# Probe530ce854 confirmed Node and tmux absent; selected native plugin/terminal tests use them.
+# Kilo CLI remains opt-in; no model or CLI downloads added. Python sqlite3 uses stdlib.
+# Base cache stage7361426f succeeded with all33 native component setups.
+# Missing libraries proved in workload741de84b: libXrender.so.1, libX11.so.6, libXext.so.6.
+# Labbench PIL failure was a probe defect: native tests use raw PNG bytes, not Pillow.
+# Ether0 native helper source prepared at b77e0d8eb06f62c8528da72bff22d4c7fee11371.
+# resources_servers/ether0/setup_ether0.py 90538b65263c77698769ea15519426227e413741
+# resources_servers/ether0/app.py e1df07c86efe336fc4d9a6e4b2bc31579759033a
 # resources_servers/ether0/pyproject.toml 30de1cbe331799a5b5125864927286535a857bd5
 # resources_servers/ether0/uv.lock 037e390d9391909a319c374b3049f66749cb1051
-# resources_servers/imo_proofbench_judge/pyproject.toml 8113a5f8475388bc9a6fa544cd461df452c7ac18
-# resources_servers/imo_proofbench_judge/uv.lock 78780688fbf88a367bea5b120c4903416d27df2d
-# resources_servers/officeqa/pyproject.toml 429c710d55ffb7acbc0b60781f0dd4d4fc1de9cb
-# resources_servers/officeqa/uv.lock 472030c0ff69dbab901d1f5275f3082762eccb8c
-# resources_servers/string_match/pyproject.toml 06071a78607744cd134a05d1454e598189f8d0ef
-# resources_servers/string_match/uv.lock 4e021b444e86daefb3466d66748f9df9cf735c69
-# resources_servers/wordle/pyproject.toml 3918448de2cb4eae93eb0e232dc2f81a2f946c41
-# resources_servers/wordle/uv.lock 6f89bd8a61bdb17831d23880876d07dc5a05fa0d
-# responses_api_agents/kilocode_agent/pyproject.toml 3eab8b46a4b96cc15fe08451c79a1e3476a3bf68
-# responses_api_agents/kilocode_agent/uv.lock 1880b2c388c76071eaf69b0d5676a4b69103f1af
-# responses_api_agents/terminus_2_sandboxed_agent/pyproject.toml 4539076b357caaf2a4b81f5b939e4e6912bb6e7c
-# responses_api_agents/terminus_2_sandboxed_agent/uv.lock ee23aa24a9b9be734b7f644e7b9c4b4c9d8d0412
-# resources_servers/browsecomp_advanced_harness/pyproject.toml cb043b42fc3a7d7089acae6d2e988593ab729849
-# resources_servers/browsecomp_advanced_harness/uv.lock f5caeecc3a1cdfaa108c03b28ccb93622ac9a8fa
-# resources_servers/false_statement_judge/pyproject.toml 7703232c01937dd7ee3492dc147001c7ff748c82
-# resources_servers/false_statement_judge/uv.lock 308672ca494f5b5353cc38001b39014f815a1ac2
+# resources_servers/labbench2_vlm/prepare_data.py 61b38f8d10edcd4ad6ed4c26d6b394b34b2f8b98
+# resources_servers/labbench2_vlm/tests/test_app.py e476b5b181844ce8e1842ccc17818cd75fc34071
 # resources_servers/labbench2_vlm/pyproject.toml 5b43b0d0e8d69e31dc1e8b24de664eb054a81979
 # resources_servers/labbench2_vlm/uv.lock 0bc0d833a7fa2c9fba9a46613067e0f453a831e3
-# resources_servers/physics_judge/pyproject.toml 60f6f58370adbbe412a5406ef4997a345766ac6e
-# resources_servers/physics_judge/uv.lock 4d306b20eae273ad6cdeeddf4ea2ca674c75fdd3
-# resources_servers/swe_rebench/pyproject.toml 34265e7f11492d0df915a674ee0d5330aa692244
-# resources_servers/swe_rebench/uv.lock 56368daec24ade3026d3e6430d54faac52e559cb
-# responses_api_agents/anyterminal_agent/pyproject.toml 305b8467c192bbb179ce4dace6c0c0bb356cbcd9
-# responses_api_agents/anyterminal_agent/uv.lock 81816a94039f9be768f5382891be45e966b9b4d5
-# responses_api_agents/non_executing_simple_agent/pyproject.toml 51136972213b66a35811a6d5178c7f8984ad45b7
-# responses_api_agents/non_executing_simple_agent/uv.lock 04c3e8a4171bc2df1aceef9b85a342479d713515
-# responses_api_models/genrm_model/pyproject.toml 72b5d12c10c4648920573785bf3564d1288d9068
-# responses_api_models/genrm_model/uv.lock 877636fbe515d207da29b768095e8e6a26266def
-FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:b16ba15766eb33466f6bac0807779a6bdd2c3e21333b00577a3da900db749b82 AS seeded
-COPY --chown=65532:65532 . /opt/nemo-gym
+# nemo_gym/orchestration/server_venv.py 7e92e7f39d9ba6175d0393a4371bee10ce90938f
+
+# responses_api_agents/kilocode_agent/install_kilo_runtime.sh beffa1b619de26f3b6e191faac8ca56ad02518da
+# responses_api_agents/kilocode_agent/task_environment.mjs d50c5ba28692c0a6c63c3977b202f0667eef5268
+# responses_api_agents/opencode_agent/assistant_message_header.js 1964e1cfc30471a8407a1d87ad56685bf9956230
+# responses_api_agents/terminus_2_sandboxed_agent/terminal.py a61a63756cba42218bd889dcc4fa05dfb03d4a91
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:c64a20ecc9ff60e146ee5fe7c4c755975d02da054f097dae953ed12d6f22738a AS native-libraries
+USER root
+# Preserve the base's signed Ubuntu repository resolution rather than inventing direct-package pins.
+RUN set -eux; \
+    dpkg-query -W libxrender1 libx11-6 libxext6 tmux 2>/dev/null || true
+RUN set -eux; \
+    apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 update; \
+    apt-get -s install --no-install-recommends libxrender1 libx11-6 libxext6 tmux; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libxrender1 libx11-6 libxext6 tmux; \
+    dpkg-query -W libxrender1 libx11-6 libxext6 tmux; \
+    rm -rf /var/lib/apt/lists/*
+# Use the exact Node distribution/version and checksum producer used by install_kilo_runtime.sh.
+RUN set -eux; \
+    mkdir -p /opt/gym-node /tmp/gym-node-download; \
+    cd /tmp/gym-node-download; \
+    curl -fsSL --retry 3 --connect-timeout 30 --max-time 180 https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz -o node-v22.19.0-linux-x64.tar.gz; \
+    curl -fsSL --retry 3 --connect-timeout 30 --max-time 180 https://nodejs.org/dist/v22.19.0/SHASUMS256.txt -o SHASUMS256.txt; \
+    awk '$2 == "node-v22.19.0-linux-x64.tar.gz"' SHASUMS256.txt | sha256sum -c -; \
+    tar -xzf node-v22.19.0-linux-x64.tar.gz --strip-components=1 -C /opt/gym-node; \
+    ln -s /opt/gym-node/bin/node /usr/local/bin/node; \
+    /usr/local/bin/node --version; \
+    rm -rf /tmp/gym-node-download
 USER 65532:65532
 WORKDIR /opt/nemo-gym
-# Publish this cache stage separately; offline lazy consumers still need verification.
-RUN HOME=/home/nemo-runtime UV_LINK_MODE=copy /opt/nemo_gym_venv/bin/python -u - <<'PYSEED'
+RUN HOME=/home/nemo-runtime /opt/nemo_gym_venv/bin/python -u - <<'PYSOURCE'
+import subprocess
+from pathlib import Path
+root = Path('/opt/nemo-gym/resources_servers/ether0/.ether0')
+print('NATIVE_ETHER0_SOURCE_PREPARE_START', flush=True)
+if not root.exists():
+    subprocess.run(['git', 'clone', '--depth=1', 'https://github.com/Future-House/ether0', str(root)], check=True, timeout=180)
+sha = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+assert sha == 'b77e0d8eb06f62c8528da72bff22d4c7fee11371', sha
+print('NATIVE_ETHER0_SOURCE_PREPARE_OK', sha, flush=True)
+PYSOURCE
+RUN HOME=/home/nemo-runtime UV_OFFLINE=1 UV_LINK_MODE=copy /opt/nemo_gym_venv/bin/python -u - <<'PYPROBE'
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from nemo_gym.config import get_global_config_dict
-from nemo_gym.orchestration.server_venv import get_venv_path, setup_env_command
-
+from nemo_gym.orchestration.server_venv import setup_env_command, run_command
 assert os.getuid() == 65532
-assert os.environ['UV_CACHE_DIR'] == '/opt/nemo-gym/cache/uv'
+assert os.environ['HOME'] == '/home/nemo-runtime'
+assert os.environ['UV_PYTHON_INSTALL_DIR'] == '/opt/uv/python'
 assert os.access(os.environ['UV_CACHE_DIR'], os.W_OK)
-assert Path('/opt/uv/python').is_dir()
-os.environ.pop('UV_OFFLINE', None)
-os.environ['UV_HTTP_TIMEOUT'] = '120'
-os.environ['UV_HTTP_RETRIES'] = '3'
 root = Path.cwd()
-selected = sorted(
-    str(p) for kind in ['environment_servers', 'resources_servers', 'responses_api_agents', 'responses_api_models']
-    for p in Path(kind).iterdir()
-    if p.is_dir() and (p / 'README.md').exists()
-    and not p.name.endswith(('.egg-info', '.dist-info')) and 'pycache' not in p.name
-)[2::8]
-assert len(selected) == 33
-report = Path('/opt/nemo-gym/cache/fingerprint-preparation')
+report = root / 'cache/fingerprint-native-libraries'
 report.mkdir(exist_ok=True)
+probes = {
+    'resources_servers/ether0': "from resources_servers.ether0.setup_ether0 import ensure_ether0,ETHER0_PATH;ensure_ether0();import subprocess;assert subprocess.check_output(['git','-C',str(ETHER0_PATH),'rev-parse','HEAD'],text=True).strip()=='b77e0d8eb06f62c8528da72bff22d4c7fee11371';import app;from ether0.rewards import EVAL_FUNCTIONS;assert EVAL_FUNCTIONS['str_eval']('CCO','CCO')==1.0;print('ETHER0_NATIVE_IMPORT_REWARD_OK')",
+}
 results = []
-with tempfile.TemporaryDirectory(prefix='gym-fingerprint-seed-') as temporary:
-    sys.argv = ['gym-preparation', '+uv_cache_dir=' + os.environ['UV_CACHE_DIR'], '+uv_venv_dir=' + temporary]
+with tempfile.TemporaryDirectory(prefix='gym-native-libs-') as temp:
+    sys.argv = ['native-prerequisites', '+uv_cache_dir=' + os.environ['UV_CACHE_DIR'], '+uv_venv_dir=' + temp]
     config = get_global_config_dict()
-    for name in selected:
-        result = {'component': name}
-        logfile = report / (name.replace('/', '__') + '.log')
-        for attempt in range(2):
-            print('NATIVE_SETUP_START', name, 'attempt', attempt + 1, flush=True)
-            command = setup_env_command(root / name, config, name)
+    for name, code in probes.items():
+        print('OFFLINE_NATIVE_CONSUMER_START', name, flush=True)
+        log = report / (name.replace('/', '__') + '.log')
+        command = setup_env_command(root / name, config, name.replace('/', r'\/')) + ' && python -u -c ' + shlex.quote(code)
+        with log.open('w') as stream:
+            proc = run_command(command, root / name, project_root=root, global_config_dict=config, stdout_target=stream, stderr_target=subprocess.STDOUT)
             try:
-                with logfile.open('a') as stream:
-                    process = subprocess.run(['bash', '-lc', command], cwd=root / name, stdout=stream, stderr=subprocess.STDOUT, timeout=600)
-                result['setup_exit'] = process.returncode
+                status = proc.wait(timeout=600)
             except subprocess.TimeoutExpired:
-                result['setup_exit'] = 124
-            if result['setup_exit'] == 0:
-                break
-            tail = logfile.read_text()[-8000:]
-            print(tail, flush=True)
-            transient = result['setup_exit'] == 124 or any(marker in tail.lower() for marker in ['timed out', 'connection reset', 'status code 429', 'status code 502', 'status code 503', 'status code 504'])
-            if not transient:
-                break
-        shutil.rmtree(get_venv_path(root / name, config), ignore_errors=True)
-        results.append(result)
+                proc.kill()
+                proc.wait()
+                status = 124
+        results.append({'component': name, 'exit': status})
+        print('OFFLINE_NATIVE_CONSUMER_RESULT', json.dumps(results[-1]), flush=True)
+        print(log.read_text()[-5000:], flush=True)
         (report / 'results.json').write_text(json.dumps(results, indent=2))
-        print('NATIVE_SETUP_RESULT', json.dumps(result), flush=True)
-if any(row['setup_exit'] for row in results):
+with tempfile.TemporaryDirectory(prefix='gym-native-tools-') as temp:
+    d = Path(temp)
+    agent = root / 'responses_api_agents/kilocode_agent'
+    shutil.copyfile(agent / 'task_environment.mjs', d / 'task_environment.mjs')
+    shutil.copyfile(root / 'responses_api_agents/opencode_agent/assistant_message_header.js', d / 'assistant_message_header.mjs')
+    (d / 'input.json').write_text('{}')
+    (d / 'task-env.json').write_text(json.dumps({'HOME': str(d / 'task-home'), 'XDG_DATA_HOME': str(d / 'data'), 'XDG_CONFIG_HOME': str(d / 'config'), 'XDG_CACHE_HOME': str(d / 'cache'), 'XDG_STATE_HOME': str(d / 'state')}))
+    script = "import {TaskEnvironment} from './task_environment.mjs';const hooks=await TaskEnvironment();const args={action:'start',command:'echo ready'};await hooks['tool.execute.before']({tool:'background_process'},{args});if(args.persistent!==true)throw Error('native plugin failed');console.log('NATIVE_NODE_PLUGIN_OK');"
+    subprocess.run(['node', '--input-type=module', '-e', script], cwd=d, check=True, timeout=30)
+    socket = str(d / 'tmux.sock')
+    try:
+        subprocess.run(['tmux', '-S', socket, 'new-session', '-d', '-s', 'prep', 'bash'], check=True, timeout=15)
+        subprocess.run(['tmux', '-S', socket, 'has-session', '-t', 'prep'], check=True, timeout=15)
+        print('NATIVE_TMUX_SESSION_OK', flush=True)
+    finally:
+        subprocess.run(['tmux', '-S', socket, 'kill-server'], check=False, timeout=15)
+shutil.rmtree(root / 'resources_servers/ether0/.ether0', ignore_errors=True)
+if any(r['exit'] for r in results):
     raise SystemExit(1)
-print('NATIVE_COMPONENT_CACHE_SEEDED_CONSUMERS_UNVALIDATED', flush=True)
-PYSEED
+print('ROOTLESS_NATIVE_LIBRARY_CONSUMERS_OK', flush=True)
+PYPROBE
 USER root
