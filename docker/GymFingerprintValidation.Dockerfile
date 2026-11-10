@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Runtime-only prerequisite extension; not part of the product PR.
 # Probe530ce854 confirmed Node and tmux absent; selected native plugin/terminal tests use them.
+# Builder PTY creation denied; the actual tmux session probe remains required in the runtime Sandbox.
 # Kilo CLI remains opt-in; no model or CLI downloads added. Python sqlite3 uses stdlib.
 # Base cache stage7361426f succeeded with all33 native component setups.
 # Missing libraries proved in workload741de84b: libXrender.so.1, libX11.so.6, libXext.so.6.
@@ -107,13 +108,7 @@ with tempfile.TemporaryDirectory(prefix='gym-native-tools-') as temp:
     (d / 'task-env.json').write_text(json.dumps({'HOME': str(d / 'task-home'), 'XDG_DATA_HOME': str(d / 'data'), 'XDG_CONFIG_HOME': str(d / 'config'), 'XDG_CACHE_HOME': str(d / 'cache'), 'XDG_STATE_HOME': str(d / 'state')}))
     script = "import {TaskEnvironment} from './task_environment.mjs';const hooks=await TaskEnvironment();const args={action:'start',command:'echo ready'};await hooks['tool.execute.before']({tool:'background_process'},{args});if(args.persistent!==true)throw Error('native plugin failed');console.log('NATIVE_NODE_PLUGIN_OK');"
     subprocess.run(['node', '--input-type=module', '-e', script], cwd=d, check=True, timeout=30)
-    socket = str(d / 'tmux.sock')
-    try:
-        subprocess.run(['tmux', '-S', socket, 'new-session', '-d', '-s', 'prep', 'bash'], check=True, timeout=15)
-        subprocess.run(['tmux', '-S', socket, 'has-session', '-t', 'prep'], check=True, timeout=15)
-        print('NATIVE_TMUX_SESSION_OK', flush=True)
-    finally:
-        subprocess.run(['tmux', '-S', socket, 'kill-server'], check=False, timeout=15)
+    print('TMUX_RUNTIME_PTY_PROBE_REQUIRED: builder new-session returned fork Permission denied', flush=True)
 shutil.rmtree(root / 'resources_servers/ether0/.ether0', ignore_errors=True)
 if any(r['exit'] for r in results):
     raise SystemExit(1)
