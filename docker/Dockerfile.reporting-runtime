@@ -1,0 +1,265 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:64a467c13a2ce9775db8ce1cf42c45dd738a1fbaa1462aa0048a1f1f9f53f946
+# Runtime-only dependency closure; kept outside the product branch.
+# Source: 50f093214498689812e997b15a63e5eb137df07a; functional:3/8 workers 3,11,19,27/32.
+# input .python-version 0cf960df58f3c12fadffb149e0ee06bb63111f41
+# input environment_servers/single_agent_turn/pyproject.toml 1ce7042b8a82d525f644fd0a2cf5f3885bf8651f
+# input environment_servers/single_agent_turn/uv.lock e73e769608b30165b4de0e99fbce6e763e76a33d
+# input nemo_gym/cli/env.py e3dd3ab48a0510b8c8971f1d3a93cf134c1a0640
+# input nemo_gym/server_runtime/supervisor/_locked_env.py b2551aa32b818f7e13ac3c38a8e43515964c5836
+# input nemo_gym/server_runtime/supervisor/server_venv.py 7773f2554704b71e0e1980e871e708e7b4d5971f
+# input pyproject.toml 339894686ccf0a91c0f4091dad678a6d4d926a36
+# input resources_servers/agentic_if_realworld/pyproject.toml 99ef6fbd0b602f816f0c9a75bd841fe951960cc9
+# input resources_servers/agentic_if_realworld/uv.lock dc32674e0ebc9b195b90f4691428fbe158ab21b9
+# input resources_servers/assaybench/pyproject.toml f7793e1b10a8d6834ce6f6635b484cfa0e27db30
+# input resources_servers/assaybench/uv.lock 23ddd0ff527354d4ca175be9a582909d83459263
+# input resources_servers/browsecomp_advanced_harness/pyproject.toml cb043b42fc3a7d7089acae6d2e988593ab729849
+# input resources_servers/browsecomp_advanced_harness/uv.lock f5caeecc3a1cdfaa108c03b28ccb93622ac9a8fa
+# input resources_servers/circle_click/pyproject.toml c52cb846ec16facfaec631c7ddd6924083b02232
+# input resources_servers/circle_click/uv.lock 70efd6c0016687893668025892d39336ea0f5f89
+# input resources_servers/critpt_custom_grader/pyproject.toml be1b63ee94e2e21d7dad299f721b3a7bbcb9badf
+# input resources_servers/critpt_custom_grader/runtime/requirements.txt 819fdd5dc0ac0db1106a7b44dfc48e7f0350948b
+# input resources_servers/critpt_custom_grader/uv.lock 5a98959f4d986965a0b5c27cce06d5541be408b9
+# input resources_servers/equivalence_rule/pyproject.toml 0e67df067027a4b625bb5eac476fdba9916e86b5
+# input resources_servers/equivalence_rule/uv.lock 31f6ca1802223c55f0d9b884b98fd10d54353990
+# input resources_servers/example_tool_call_multireward/pyproject.toml 950aa734bfbcc80304c73dcf30cb89a671c658f1
+# input resources_servers/example_tool_call_multireward/uv.lock 6fd2ae94ba61fd2b9901b59dc3b5d03148c50e4e
+# input resources_servers/gdp_pdf/pyproject.toml fdcde89a1229ea797f4885d5682bab7e2c5c6c40
+# input resources_servers/gdp_pdf/uv.lock 77232b9bfaa08039e6ebeb0e93fe90c87871025f
+# input resources_servers/grl_sokoban/pyproject.toml 08c28973a1028f8bfa5d023a92514baaf49131b2
+# input resources_servers/grl_sokoban/uv.lock d792df6ae426d98d049107125a12714a7edd6e87
+# input resources_servers/imo_gradingbench/pyproject.toml a803b7ea6719debdad079f427e8a9a742f445d71
+# input resources_servers/imo_gradingbench/uv.lock 6fc9011967744d4ea21b09fedce27804a29ed5ee
+# input resources_servers/job_bench/pyproject.toml 616f60892c93398b59fcff62fc16b2406949bddd
+# input resources_servers/job_bench/uv.lock 05ec86a110aee320dc544eb1bb6b6e6dba2a5da2
+# input resources_servers/math_advanced_calculations/pyproject.toml daf5bf5f42b9cc6cac4967828b4305acf1e2d1b2
+# input resources_servers/math_advanced_calculations/uv.lock ea36168cf1be15e23de042f3e9d89e87f0c75648
+# input resources_servers/moldetox/pyproject.toml b74bb8a8bf238313c5f3b2dba3e415481d439f5e
+# input resources_servers/moldetox/uv.lock 8b78e7bad0bbdb512400b526e1867c6bbd1c43f5
+# input resources_servers/officeenv/pyproject.toml a5121bcba4194412302c9cc9585c5f7941b8fd5b
+# input resources_servers/officeenv/uv.lock 3ffba3e1e14afc630846243ad3efe2118dda88cc
+# input resources_servers/partner_if/pyproject.toml 780f4a0c44207c90973983225a89b8ca425818fa
+# input resources_servers/partner_if/uv.lock 86212c688f2ae2df04adebc046f6512996bbf18d
+# input resources_servers/ragtruth/pyproject.toml c15215645f1d62775ac2dbd3339bc9d135ad1e8a
+# input resources_servers/ragtruth/uv.lock c4fc48f47abc952d6879deaa819baaf76c7f4979
+# input resources_servers/scicode/pyproject.toml d2207964cf5621e9de7916106d016ce52e94a1b0
+# input resources_servers/scicode/uv.lock 5a29a3babb07bbc70316542b840795bea6019c76
+# input resources_servers/spider2_lite/pyproject.toml a97438bda7e47b3c8d7fbafe67d702c4f793938d
+# input resources_servers/spider2_lite/uv.lock 06797d2fa5f57e343eae33a6333474e5ec91ee04
+# input resources_servers/swe_pivot/pyproject.toml 79b99e4f1fd34228cec13c51e5f050b33da09299
+# input resources_servers/swe_pivot/uv.lock ccd7e7d49d4257769a3a5f8f33cbd3bf94c75bb6
+# input resources_servers/swerl_gen/pyproject.toml d7cc6b07da5b8092c140abc70c2d55c6224e4180
+# input resources_servers/swerl_gen/uv.lock b0f6b4747cb0e9d1c4b1880819715913bbf79741
+# input resources_servers/text_to_sql/pyproject.toml c431f8b3ee78b73eff83adb6a802aa5856074899
+# input resources_servers/text_to_sql/uv.lock 30f181d333e96e01d9dee462ee3bd1bf5bf2d7b3
+# input resources_servers/wmt_translation/pyproject.toml 4730f4af3be5e6501d55b69a86544b389beec438
+# input resources_servers/wmt_translation/uv.lock 0b2060c4025db72dc92998d90f513e769c030887
+# input responses_api_agents/anyswe_agent/pyproject.toml 9e4937246854c5e50931a341831f54378bc16926
+# input responses_api_agents/anyswe_agent/uv.lock fd89f811aef7832d25f0f930c23e4925df46aa8f
+# input responses_api_agents/conversational_tool_use_policy_tool_generation/pyproject.toml dc57b1fc3e228cdad4078ae1f7bf3fcbdf544106
+# input responses_api_agents/conversational_tool_use_policy_tool_generation/uv.lock 77b40f43ddcbcbeb64a70ba4fac968268fc8c7ad
+# input responses_api_agents/harbor_agent/pyproject.toml c890a7c00640f91cca60f15854dab2384f1ce951
+# input responses_api_agents/harbor_agent/uv.lock aab8d636062e4b486179946224581cc0422353cb
+# input responses_api_agents/image_tools_agent/pyproject.toml 55064811a7a0416abf87f05e42e5f8d8ed0a335c
+# input responses_api_agents/image_tools_agent/uv.lock 272c836e7956d1eda7425a9ee6a8d6e8d32daef2
+# input responses_api_agents/nemo_fabric_agent/pyproject.toml c2291fb0dc609f0763b5f6106ed067ba3f7591a6
+# input responses_api_agents/nemo_fabric_agent/uv.lock aca4dd95337f51323871916ae692299059cba367
+# input responses_api_agents/pi_agent/configs/pi_agent.yaml 74c8338711fc55d74934a2eb0a0dcf8a68488336
+# input responses_api_agents/pi_agent/install_pi_runtime.sh 3f081cd6435fe4991ae13e7075890aac02323de1
+# input responses_api_agents/pi_agent/pyproject.toml 3a9e4a42c7fd6bdd41380238f52fae2a1f686f9f
+# input responses_api_agents/pi_agent/uv.lock 278ae06314ee2065010ae109739b55075c597626
+# input responses_api_agents/scicode_agent/pyproject.toml 3090b60256c3119be5160ce44cf8451446dfc5a8
+# input responses_api_agents/scicode_agent/uv.lock 607c6e61c18746955ecc4004dcfabe9b19258202
+# input responses_api_agents/terminus_2_agent/pyproject.toml b6437f58ebe22208f740c31ad637130adc0a15db
+# input responses_api_agents/terminus_2_agent/uv.lock 26ed361e782d49fc15fc1c90d4f5caf356eab759
+# input responses_api_models/azure_openai_model/pyproject.toml 68f7e82087ba90a54d6ef680aab10b0fdf36fa95
+# input responses_api_models/azure_openai_model/uv.lock 424a8e690faf8d55d03bc6090221c09d0fd7016a
+# input responses_api_models/vllm_model/.python-version ccdb2c75a1e01d43a20959493556b0f149fdf879
+# input responses_api_models/vllm_model/pyproject.toml d4e4afeecdfea70baeadfda9c18a4f45ad51b029
+# input responses_api_models/vllm_model/uv.lock 1515d9bbeb2c8dbf49cfa791a7646fe7fa7c74f2
+# input scripts/ci/install_test_dependencies.sh 8b6279aa459c332cd2976318be4749e632d938e0
+# input scripts/ci/sanitize_env.sh ae3f0c298a0c6eec1befbaea0a0b3a43be50498d
+# input scripts/ci/server_test_workers.py 5b0994f550004492967db6d9b40e7f36169fd9c0
+# input scripts/ci/server_tests.sh 741add872394adf27e25755b0ef716c11a7ab3d2
+# input scripts/ci/setup_dev.sh 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da
+# input uv.lock dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1
+USER root
+COPY --chown=65532:65532 . /opt/nemo-gym
+RUN <<'OS' bash -euo pipefail
+# Preserve the signed Ubuntu resolver; HTTPS is required by dependency egress.
+sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+apt-get -o Acquire::Retries=3 -o Acquire::https::Timeout=60 -o APT::Update::Error-Mode=any update
+python - <<'PACKAGES'
+import re,subprocess
+from pathlib import Path
+source=Path('/opt/nemo-gym/scripts/ci/install_test_dependencies.sh').read_text()
+packages=re.search(r'packages=\((.*?)\n\)',source,re.S).group(1).split()
+subprocess.run(['apt-get','-s','install','--no-install-recommends',*packages],check=True)
+subprocess.run(['timeout','600','apt-get','install','-y','--no-install-recommends',*packages],check=True)
+PACKAGES
+rm -rf /var/lib/apt/lists/*
+OS
+ENV SACREBLEU=/opt/nemo-gym/cache/sacrebleu
+USER 65532:65532
+RUN HOME=/home/nemo-runtime timeout 900 bash responses_api_agents/pi_agent/install_pi_runtime.sh /opt/nemo-gym/cache/pi-runtime 0.80.2
+ENV PATH="/opt/nemo-gym/cache/pi-runtime/node/bin:/opt/nemo-gym/cache/pi-runtime/pi/node_modules/.bin:${PATH}"
+USER 65532:65532
+WORKDIR /opt/nemo-gym
+RUN HOME=/home/nemo-runtime UV_OFFLINE=0 uv pip install --python /opt/nemo_gym_venv/bin/python --no-deps -e . && \
+    HOME=/home/nemo-runtime UV_OFFLINE=0 UV_PROJECT_ENVIRONMENT=/tmp/reporting-root-seed \
+        uv sync --locked --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb && \
+    rm -rf /tmp/reporting-root-seed
+RUN <<'SEED' bash -euo pipefail
+export HOME=/home/nemo-runtime UV_OFFLINE=0 UV_HTTP_TIMEOUT=120 UV_HTTP_RETRIES=3
+python - <<'NATIVE'
+import concurrent.futures,json,os,signal,subprocess,sys,time
+from pathlib import Path
+from omegaconf import OmegaConf
+from nemo_gym.config import GlobalConfigDictParser,GlobalConfigDictParserConfig
+from nemo_gym.cli.env import TestConfig
+from nemo_gym.server_runtime.supervisor.server_venv import setup_env_command
+root=Path('/opt/nemo-gym');P=GlobalConfigDictParserConfig
+cfg=GlobalConfigDictParser().parse(P(initial_global_config_dict=OmegaConf.merge(P.NO_MODEL_GLOBAL_CONFIG_DICT,{'uv_venv_dir':'/tmp/server-seed','uv_cache_dir':os.environ['UV_CACHE_DIR'],'skip_venv_if_present':False}),skip_load_from_cli=True,skip_load_from_dotenv=True,offline=True))
+entries=['environment_servers/single_agent_turn', 'resources_servers/circle_click', 'resources_servers/gdp_pdf', 'resources_servers/math_advanced_calculations', 'resources_servers/ragtruth', 'resources_servers/swerl_gen', 'responses_api_agents/conversational_tool_use_policy_tool_generation', 'responses_api_agents/pi_agent', 'responses_api_models/vllm_model', 'resources_servers/agentic_if_realworld', 'resources_servers/critpt_custom_grader', 'resources_servers/grl_sokoban', 'resources_servers/moldetox', 'resources_servers/scicode', 'resources_servers/text_to_sql', 'responses_api_agents/harbor_agent', 'responses_api_agents/scicode_agent', 'resources_servers/assaybench', 'resources_servers/equivalence_rule', 'resources_servers/imo_gradingbench', 'resources_servers/officeenv', 'resources_servers/spider2_lite', 'resources_servers/wmt_translation', 'responses_api_agents/image_tools_agent', 'responses_api_agents/terminus_2_agent', 'resources_servers/browsecomp_advanced_harness', 'resources_servers/example_tool_call_multireward', 'resources_servers/job_bench', 'resources_servers/partner_if', 'resources_servers/swe_pivot', 'responses_api_agents/anyswe_agent', 'responses_api_agents/nemo_fabric_agent', 'responses_api_models/azure_openai_model']
+report=root/'results/reporting-runtime-setup.jsonl'
+def run(n):
+ tc=TestConfig(entrypoint=n);command=setup_env_command(tc.resolved_dir_path,cfg,n.replace('/','\\/'));log=root/'results'/('seed-'+n.replace('/','-')+'.log')
+ for attempt in range(2):
+  with log.open('w') as f:
+   p=subprocess.Popen(['bash','-c',command],cwd=root/n,stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
+   try:code=p.wait(timeout=360)
+   except subprocess.TimeoutExpired:os.killpg(p.pid,signal.SIGKILL);p.wait();code=124
+  if code==0:return n,code,log
+  text=log.read_text()
+  if attempt or not any(x in text.lower() for x in ['timed out','connection reset','429','502','503','504']):break
+ return n,code,log
+failed=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+ for n,code,log in pool.map(run,entries):
+  row={'component':n,'exit':code,'log':str(log)}
+  with report.open('a') as f:f.write(json.dumps(row)+'\n');f.flush()
+  print(json.dumps(row),flush=True)
+  if code:failed.append(n);print('\n'.join(log.read_text().splitlines()[-12:]),flush=True)
+if failed:raise SystemExit('failed native preparation: '+str(failed))
+NATIVE
+export HOME=/home/nemo-runtime GYM_PROBE_ROOT=/opt/nemo-gym
+/tmp/server-seed/resources_servers/wmt_translation/.venv/bin/python - <<'ASSET'
+import hashlib,os
+from pathlib import Path
+import socket
+socket.setdefaulttimeout(120)
+from sacrebleu import sentence_bleu
+assert sentence_bleu('Hallo Welt.',['Hallo Welt.'],tokenize='flores200').score>99
+p=Path(os.environ['SACREBLEU'])/'models/flores200sacrebleuspm'
+assert hashlib.sha256(p.read_bytes()).hexdigest()=='14bb8dfb35c0ffdea7bc01e56cea38b9e3d5efcdcb9c251d6b40538e1aab555a'
+ASSET
+cat > /tmp/offline-consumers.py <<'CONSUMERS'
+import os,sys,socket,tempfile,json,hashlib
+from pathlib import Path
+root=Path(os.environ.get('GYM_PROBE_ROOT','/workspace/Gym'));sys.path.insert(0,str(root))
+component=sys.argv[1]
+def audit(event,args):
+ if event=='socket.connect':
+  address=args[1]
+  if isinstance(address,tuple) and address[0] not in ('127.0.0.1','::1'):raise RuntimeError('offline probe refused external connection '+str(address))
+sys.addaudithook(audit)
+assert os.getuid()==65532
+if component=='wmt_translation':
+ from sacrebleu import sentence_bleu,corpus_bleu
+ text='Hallo Welt dies ist ein langer deutscher Beispielsatz.'
+ assert sentence_bleu(text,[text],tokenize='flores200').score>99
+ assert corpus_bleu([text],[[text]],tokenize='flores200').score>99
+ from resources_servers.wmt_translation.in22_metrics import normalize_in22
+ for language,text in [('hi','यह एक हिन्दी वाक्य है।'),('ur','یہ ایک اردو جملہ ہے۔')]:assert normalize_in22(text,language)
+ from resources_servers.wmt_translation.wmt24pp_cld2_language_consistency import wmt24pp_cld2_language_consistency_score
+ assert wmt24pp_cld2_language_consistency_score('Der schnelle braune Fuchs springt über den faulen Hund. Heute scheint die Sonne und die Kinder spielen im Garten.','de_DE')>0.5
+ asset=Path(os.environ['SACREBLEU'])/'models/flores200sacrebleuspm';print('flores200',hashlib.sha256(asset.read_bytes()).hexdigest())
+elif component=='assaybench':
+ from assaybench.benchmark.metrics import RankingMetrics
+ from assaybench.utils.prompt_loaders import load_objective_prompt
+ metrics=RankingMetrics(k_values=[10],use_gene_mapper=True)
+ assert metrics.gene_mapper.map_gene('TP53')
+ assert load_objective_prompt('biogrid_ranking_prompt')
+elif component=='moldetox':
+ from resources_servers.moldetox.metrics import decode_safe,canonical_smiles
+ safe='Cc1cnc6cn1.c15cc7ncn1.c17c(C)noc1C.C46.N45'
+ assert canonical_smiles(decode_safe(safe))
+ from rdkit import Chem
+ from rdkit.Chem import rdFingerprintGenerator
+ assert rdFingerprintGenerator.GetMorganGenerator(radius=2).GetFingerprint(Chem.MolFromSmiles('CCO')).GetNumOnBits()>0
+elif component=='nemo_fabric_agent':
+ from omegaconf import OmegaConf
+ from unittest.mock import MagicMock
+ from nemo_fabric import Fabric
+ from nemo_gym.client import ServerClient
+ from nemo_gym.config import ResourcesServerRef,ModelServerRef
+ from responses_api_agents.nemo_fabric_agent.app import NeMoFabricAgent,NeMoFabricAgentConfig
+ configs=root/'responses_api_agents/nemo_fabric_agent/configs'
+ for preset_name in ['nemo_fabric_claude','nemo_fabric_codex','nemo_fabric_deepagents','nemo_fabric_hermes','nemo_fabric_mini_swe_agent','nemo_fabric_openhands']:
+  base=OmegaConf.load(configs/'nemo_fabric_agent.yaml').nemo_fabric_agent;preset=OmegaConf.load(configs/(preset_name+'.yaml'))[preset_name];preset.pop('_inherit_from');OmegaConf.set_struct(base,True)
+  merged=OmegaConf.to_container(OmegaConf.merge(base,preset),resolve=True)['responses_api_agents']['nemo_fabric_agent']
+  config=NeMoFabricAgentConfig(host='0.0.0.0',port=8080,entrypoint='',name='fabric',resources_server=ResourcesServerRef(type='resources_servers',name='resources'),model_server=ModelServerRef(type='responses_api_models',name='policy_model'),model='gym-policy-model',adapter_id=merged['adapter_id'],model_provider=merged['model_provider'],harness_settings=merged.get('harness_settings',{}),fabric_config=merged.get('fabric_config',{}))
+  agent=NeMoFabricAgent(config=config,server_client=MagicMock(spec=ServerClient))
+  with tempfile.TemporaryDirectory() as d:
+   d=Path(d);c=agent._fabric_config(model_base_url='http://model/v1',workspace=d,system_prompt=None,mcp_servers={},skills=[]);assert Fabric().plan(c,base_dir=d).adapter.adapter_id==merged['adapter_id']
+ print('six native adapter plans passed')
+else:raise ValueError(component)
+print(component,'offline consumer passed uid',os.getuid())
+CONSUMERS
+export UV_OFFLINE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9
+for pair in resources_servers/wmt_translation resources_servers/assaybench resources_servers/moldetox responses_api_agents/nemo_fabric_agent; do
+    /tmp/server-seed/$pair/.venv/bin/python /tmp/offline-consumers.py "${pair##*/}"
+done
+# Verify fresh locked setup under the final UID, not imports alone.
+python - <<'NATIVE'
+import concurrent.futures,json,os,signal,subprocess,sys,time
+from pathlib import Path
+from omegaconf import OmegaConf
+from nemo_gym.config import GlobalConfigDictParser,GlobalConfigDictParserConfig
+from nemo_gym.cli.env import TestConfig
+from nemo_gym.server_runtime.supervisor.server_venv import setup_env_command
+root=Path('/opt/nemo-gym');P=GlobalConfigDictParserConfig
+cfg=GlobalConfigDictParser().parse(P(initial_global_config_dict=OmegaConf.merge(P.NO_MODEL_GLOBAL_CONFIG_DICT,{'uv_venv_dir':'/tmp/server-offline-probe','uv_cache_dir':os.environ['UV_CACHE_DIR'],'skip_venv_if_present':False}),skip_load_from_cli=True,skip_load_from_dotenv=True,offline=True))
+entries=['environment_servers/single_agent_turn', 'resources_servers/circle_click', 'resources_servers/gdp_pdf', 'resources_servers/math_advanced_calculations', 'resources_servers/ragtruth', 'resources_servers/swerl_gen', 'responses_api_agents/conversational_tool_use_policy_tool_generation', 'responses_api_agents/pi_agent', 'responses_api_models/vllm_model', 'resources_servers/agentic_if_realworld', 'resources_servers/critpt_custom_grader', 'resources_servers/grl_sokoban', 'resources_servers/moldetox', 'resources_servers/scicode', 'resources_servers/text_to_sql', 'responses_api_agents/harbor_agent', 'responses_api_agents/scicode_agent', 'resources_servers/assaybench', 'resources_servers/equivalence_rule', 'resources_servers/imo_gradingbench', 'resources_servers/officeenv', 'resources_servers/spider2_lite', 'resources_servers/wmt_translation', 'responses_api_agents/image_tools_agent', 'responses_api_agents/terminus_2_agent', 'resources_servers/browsecomp_advanced_harness', 'resources_servers/example_tool_call_multireward', 'resources_servers/job_bench', 'resources_servers/partner_if', 'resources_servers/swe_pivot', 'responses_api_agents/anyswe_agent', 'responses_api_agents/nemo_fabric_agent', 'responses_api_models/azure_openai_model']
+report=root/'results/reporting-runtime-setup.jsonl'
+def run(n):
+ tc=TestConfig(entrypoint=n);command=setup_env_command(tc.resolved_dir_path,cfg,n.replace('/','\\/'));log=root/'results'/('seed-'+n.replace('/','-')+'.log')
+ for attempt in range(2):
+  with log.open('w') as f:
+   p=subprocess.Popen(['bash','-c',command],cwd=root/n,stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
+   try:code=p.wait(timeout=360)
+   except subprocess.TimeoutExpired:os.killpg(p.pid,signal.SIGKILL);p.wait();code=124
+  if code==0:return n,code,log
+  text=log.read_text()
+  if attempt or not any(x in text.lower() for x in ['timed out','connection reset','429','502','503','504']):break
+ return n,code,log
+failed=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+ for n,code,log in pool.map(run,entries):
+  row={'component':n,'exit':code,'log':str(log)}
+  with report.open('a') as f:f.write(json.dumps(row)+'\n');f.flush()
+  print(json.dumps(row),flush=True)
+  if code:failed.append(n);print('\n'.join(log.read_text().splitlines()[-12:]),flush=True)
+if failed:raise SystemExit('failed native preparation: '+str(failed))
+NATIVE
+# Runtime metadata/config writes and fixed-PATH subprocesses run as the test UID.
+python - <<'FILESYSTEM'
+import os,fcntl,subprocess,tempfile,socket
+from pathlib import Path
+assert os.getuid()==65532
+for root in ['/home/nemo-runtime','/opt/nemo-gym','/opt/nemo-gym/cache/uv','/opt/nemo-gym/results']:
+ p=Path(root)/'.runtime-write-probe';p.write_text('ok');q=p.with_suffix('.renamed');p.rename(q)
+ with q.open('r+') as f:fcntl.flock(f,fcntl.LOCK_EX);f.flush();os.fsync(f.fileno())
+ q.unlink()
+subprocess.run(['/usr/bin/bash','-c','command -v git; printf shell-ok'],env={**os.environ,'PATH':'/usr/bin:/bin'},check=True)
+with tempfile.TemporaryDirectory() as d:
+ p=Path(d)/'exec';p.write_text('#!/bin/sh\nexit 0\n');p.chmod(0o700);subprocess.run([str(p)],check=True)
+with socket.socket() as s:s.bind(('127.0.0.1',0));s.listen()
+FILESYSTEM
+node --version
+pi --version
+rm -rf /tmp/server-seed /tmp/server-offline-probe /tmp/offline-consumers.py
+SEED
+USER root
