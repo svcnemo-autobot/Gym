@@ -111,6 +111,11 @@ RUN HOME=/home/nemo-runtime UV_OFFLINE=0 uv pip install --python /opt/nemo_gym_v
     HOME=/home/nemo-runtime UV_OFFLINE=0 UV_PROJECT_ENVIRONMENT=/tmp/reporting-root-seed \
         uv sync --locked --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb && \
     rm -rf /tmp/reporting-root-seed
+USER root
+# The inherited vLLM source backend writes metadata in the parent directory.
+# COPY does not replace its generated, root-owned metadata files.
+RUN chown -R 65532:65532 /opt/nemo-gym/responses_api_models/vllm_model.egg-info
+USER 65532:65532
 RUN <<'SEED' bash -euo pipefail
 export HOME=/home/nemo-runtime UV_OFFLINE=0 UV_HTTP_TIMEOUT=120 UV_HTTP_RETRIES=3
 python - <<'NATIVE'
