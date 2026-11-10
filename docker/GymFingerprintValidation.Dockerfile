@@ -16,7 +16,7 @@
 # nemo_gym/sandbox/providers/docker/provider.py 77ff4f60178c120625b3a46d804d836f4835b879
 # .github/workflows/unit-tests.yml 75cc074b9308494c60b72087548b1a7bceac4c3e
 # nemo_gym/orchestration/server_venv.py 7e92e7f39d9ba6175d0393a4371bee10ce90938f
-FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:03da4ac4ad37efaabc34358316d05cd5de1a69ebb528609bde2760631314bc71 AS native-host-parity
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:03da4ac4ad37efaabc34358316d05cd5de1a69ebb528609bde2760631314bc71 AS native-host-tools
 USER root
 # Keep the distro's signed repository resolution and record its exact candidate and transaction.
 # Extract only the genuine CLI from the authenticated Ubuntu package: no daemon/socket is needed.
@@ -42,6 +42,7 @@ RUN set -eux; \
     install -m 0644 extracted/usr/share/doc/docker.io/copyright /opt/nemo-gym/cache/fingerprint-host-parity/docker-copyright; \
     /usr/local/bin/docker --version; \
     rm -rf /tmp/gym-docker-package /var/lib/apt/lists/*
+FROM native-host-tools AS native-host-parity
 USER 65532:65532
 WORKDIR /opt/nemo-gym
 RUN HOME=/home/nemo-runtime UV_OFFLINE=1 UV_LINK_MODE=copy /opt/nemo_gym_venv/bin/python -u - <<'PYPROBE'
@@ -59,7 +60,9 @@ assert os.getuid() == 65532
 assert os.environ['HOME'] == '/home/nemo-runtime'
 assert Path('/bin/sh').resolve() == Path('/bin/dash').resolve()
 assert os.environ['UV_PYTHON_INSTALL_DIR'] == '/opt/uv/python'
-for name in ['HOME', 'UV_CACHE_DIR', 'UV_PYTHON_INSTALL_DIR']:
+# Installed interpreters are immutable inputs; native setup reuses them offline.
+assert os.access(os.environ['UV_PYTHON_INSTALL_DIR'], os.R_OK | os.X_OK)
+for name in ['HOME', 'UV_CACHE_DIR']:
     with tempfile.NamedTemporaryFile(prefix='host-parity-', dir=os.environ[name]) as stream:
         stream.write(b'rootless native runtime write probe')
         stream.flush()
