@@ -7,8 +7,18 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 WORKDIR /opt/nemo-gym
 # Use the native CI package list and resolver rather than independently pinning companions.
 RUN export DEBIAN_FRONTEND=noninteractive; \
-    packages="$(sed -n '/^packages=(/,/^)/p' scripts/ci/install_test_dependencies.sh | sed '1d;$d')"; \
-    apt-get update && apt-get install -y --no-install-recommends ${packages} && \
+    export packages="$(sed -n '/^packages=(/,/^)/p' scripts/ci/install_test_dependencies.sh | sed '1d;$d')"; \
+    for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do \
+        if test -f "$source"; then sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' "$source"; fi; \
+    done; \
+    apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30); \
+    status=1; \
+    for attempt in 1 2; do \
+        echo "STAGE native OS prerequisites attempt=${attempt}"; \
+        if timeout 300s bash -euo pipefail -c 'apt-get "$@" update && apt-get "$@" install -y --no-install-recommends $packages' \
+            bash "${apt_options[@]}"; then status=0; break; fi; \
+    done; \
+    test "$status" -eq 0; \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 # The published image owns source directories but retains root-owned generated
 # editable metadata. Preserve the metadata and its modes; restore its runtime owner.
