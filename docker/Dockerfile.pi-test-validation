@@ -1,0 +1,158 @@
+# syntax=docker/dockerfile:1
+# Validation-only extension; not part of the product PR.
+# Source/setup/lock Git blobs are recorded below. Native component setup is unchanged.
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:7e3c83cd9458f12216f39c4088a554ef24e38f20f487c84fb9376aa7f543ce99
+USER root
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+WORKDIR /opt/nemo-gym
+# Use the native CI package list and resolver rather than independently pinning companions.
+RUN export DEBIAN_FRONTEND=noninteractive; \
+    packages="$(sed -n '/^packages=(/,/^)/p' scripts/ci/install_test_dependencies.sh | sed '1d;$d')"; \
+    apt-get update && apt-get install -y --no-install-recommends ${packages} && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+USER 65532:65532
+ENV HOME=/home/nemo-runtime XDG_CACHE_HOME=/opt/nemo-gym/cache/xdg
+# NGC's /bin/sh wrapper dispatches to dash with this supported status binding,
+# matching the Ubuntu host where the server tests run.
+ENV _CUDA_COMPAT_STATUS=0
+RUN mkdir -p /opt/nemo-gym/cache/pi-validation-evidence
+# The CI image seeded only the root lock, not the selected components' own locks.
+# Retain complete output in the successful image; keep published output bounded.
+RUN <<'BASH'
+echo 'STAGE selected native component cache seeding'
+export UV_OFFLINE=0 UV_NO_SYNC=0 UV_LINK_MODE=copy
+seed_root=$(mktemp -d)
+trap 'rm -rf "$seed_root"' EXIT
+status=0
+timeout 2400s ng_test_all +setup_only=true +num_shards=8 +shard_index=1 \
+    +delete_venvs_after_each_test=true "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_root}" \
+    > /opt/nemo-gym/cache/pi-validation-evidence/setup-online.log 2>&1 || status=$?
+if (( status != 0 )); then
+    grep -E 'error:|cause:|failed|Failed|^- ' /opt/nemo-gym/cache/pi-validation-evidence/setup-online.log | tail -100 || true
+    echo "STAGE selected native component cache seeding EXIT=$status"
+    exit "$status"
+fi
+tail -8 /opt/nemo-gym/cache/pi-validation-evidence/setup-online.log
+echo 'STAGE selected native component cache seeding EXIT=0'
+BASH
+# Prepare the one real lazy model consumer in the selected tests through its native API.
+# COMET/GloT-LID, sandbox images and scientific grading are mocked by these unit tests.
+ENV SACREBLEU=/opt/nemo-gym/cache/sacrebleu
+RUN <<'BASH'
+echo 'STAGE FLORES-200 native tokenizer preparation'
+export UV_OFFLINE=0 UV_NO_SYNC=0
+uv venv /tmp/gym-wmt-probe
+UV_PROJECT_ENVIRONMENT=/tmp/gym-wmt-probe uv sync --locked --project resources_servers/wmt_translation --no-dev --inexact > /opt/nemo-gym/cache/pi-validation-evidence/wmt-setup.log 2>&1
+/tmp/gym-wmt-probe/bin/python - <<'PY'
+from sacrebleu.metrics import BLEU
+metric=BLEU(tokenize='flores200',effective_order=True)
+assert metric.sentence_score('hello world',['hello world']).score > 99
+print('FLORES-200 prepared through locked SacreBLEU')
+PY
+rm -rf /tmp/gym-wmt-probe
+echo 'STAGE FLORES-200 native tokenizer preparation EXIT=0'
+BASH
+# Prove fresh native environment replacement offline as the actual runtime user.
+RUN <<'BASH'
+echo 'STAGE offline native setup and writable runtime preflight'
+export UV_OFFLINE=1 UV_NO_SYNC=0 UV_LINK_MODE=copy
+seed_root=$(mktemp -d)
+trap 'rm -rf "$seed_root"' EXIT
+status=0
+timeout 2400s ng_test_all +setup_only=true +num_shards=8 +shard_index=1 \
+    +delete_venvs_after_each_test=true "+uv_cache_dir=${UV_CACHE_DIR}" "+uv_venv_dir=${seed_root}" \
+    > /opt/nemo-gym/cache/pi-validation-evidence/setup-offline.log 2>&1 || status=$?
+if (( status != 0 )); then tail -90 /opt/nemo-gym/cache/pi-validation-evidence/setup-offline.log; exit "$status"; fi
+python - <<'PY'
+import os,tempfile,pathlib,subprocess,ctypes
+assert os.getuid()==65532
+for root in [os.environ['HOME'],os.environ['UV_CACHE_DIR'],os.environ['XDG_CACHE_HOME'],'/opt/nemo-gym/cache','/opt/nemo-gym']:
+ p=pathlib.Path(root,'.pi-validation-write');p.write_text('x');p.unlink()
+for lib in ['libGL.so.1','libSM.so.6','libXext.so.6','libXrender.so.1']:ctypes.CDLL(lib)
+assert subprocess.check_output(['/bin/sh','-c','printf %s "$0"'],text=True)=='/bin/dash'
+with tempfile.TemporaryDirectory() as d:
+ p=pathlib.Path(d,'old');p.write_text('x')
+ with p.open('a') as f:f.flush();os.fsync(f.fileno())
+ p.rename(pathlib.Path(d,'new'))
+print('runtime UID, paths, native libraries, dash dispatch and flush/rename passed')
+PY
+tail -8 /opt/nemo-gym/cache/pi-validation-evidence/setup-offline.log
+echo 'STAGE offline native setup EXIT=0'
+BASH
+USER root
+
+# Dependency/input provenance at protected base 824f2b38bf7522620bca6c508b65dd16f2a44106
+# INPUT 09763b1e23e72aa9ca50ba1be471e0576b4c5dee docker/Dockerfile
+# INPUT bf604fd8ffd58df845cc11ed6b8584549f5a0e8d environment_servers/legacy_agent/pyproject.toml
+# INPUT 2cfc19d72dbe6f1874e449790722a24bab2ad847 environment_servers/legacy_agent/uv.lock
+# INPUT a29b93b067b94ddca202555e8b65278a0213ffee nemo_gym/cli/env.py
+# INPUT 8fed2151db948116b30d82ccf43b6ecf4e3428db nemo_gym/orchestration/executors/script_templates.py
+# INPUT 7e92e7f39d9ba6175d0393a4371bee10ce90938f nemo_gym/orchestration/server_venv.py
+# INPUT 4432400529e663b539e22fdf264ff8b74a5ccfb7 pyproject.toml
+# INPUT 25c2cc4d7965687d045b3c4801ada01760c7d048 resources_servers/agentic_if/pyproject.toml
+# INPUT 03dd1378fd24014db1efa2368aeb26ed011b48d5 resources_servers/agentic_if/uv.lock
+# INPUT 57059d912307ea97dc117a292ad3dd0987b86df4 resources_servers/asr_with_pc/pyproject.toml
+# INPUT 31104a11ae4eb63b38b6c4c6bed328b99f583b59 resources_servers/asr_with_pc/uv.lock
+# INPUT c648f009b717499e4e1bf1e6ea128a7ac8ea73dc resources_servers/blackjack/pyproject.toml
+# INPUT 9f8717eccc529c113302deeee9909afdd30ac4f7 resources_servers/blackjack/uv.lock
+# INPUT c52cb846ec16facfaec631c7ddd6924083b02232 resources_servers/circle_click/pyproject.toml
+# INPUT 70efd6c0016687893668025892d39336ea0f5f89 resources_servers/circle_click/uv.lock
+# INPUT be1b63ee94e2e21d7dad299f721b3a7bbcb9badf resources_servers/critpt_custom_grader/pyproject.toml
+# INPUT 5a98959f4d986965a0b5c27cce06d5541be408b9 resources_servers/critpt_custom_grader/uv.lock
+# INPUT 0e67df067027a4b625bb5eac476fdba9916e86b5 resources_servers/equivalence_rule/pyproject.toml
+# INPUT 31f6ca1802223c55f0d9b884b98fd10d54353990 resources_servers/equivalence_rule/uv.lock
+# INPUT 950aa734bfbcc80304c73dcf30cb89a671c658f1 resources_servers/example_tool_call_multireward/pyproject.toml
+# INPUT 6fd2ae94ba61fd2b9901b59dc3b5d03148c50e4e resources_servers/example_tool_call_multireward/uv.lock
+# INPUT 52f5651041ff9946027a5be51cee1f4f61270689 resources_servers/gdp_pdf/pyproject.toml
+# INPUT dacb2d3c1e1da2a40cf0f804c4722fc65b5f065e resources_servers/gdp_pdf/uv.lock
+# INPUT 08c28973a1028f8bfa5d023a92514baaf49131b2 resources_servers/grl_sokoban/pyproject.toml
+# INPUT d792df6ae426d98d049107125a12714a7edd6e87 resources_servers/grl_sokoban/uv.lock
+# INPUT a803b7ea6719debdad079f427e8a9a742f445d71 resources_servers/imo_gradingbench/pyproject.toml
+# INPUT 6fc9011967744d4ea21b09fedce27804a29ed5ee resources_servers/imo_gradingbench/uv.lock
+# INPUT 616f60892c93398b59fcff62fc16b2406949bddd resources_servers/job_bench/pyproject.toml
+# INPUT 05ec86a110aee320dc544eb1bb6b6e6dba2a5da2 resources_servers/job_bench/uv.lock
+# INPUT daf5bf5f42b9cc6cac4967828b4305acf1e2d1b2 resources_servers/math_advanced_calculations/pyproject.toml
+# INPUT ea36168cf1be15e23de042f3e9d89e87f0c75648 resources_servers/math_advanced_calculations/uv.lock
+# INPUT b74bb8a8bf238313c5f3b2dba3e415481d439f5e resources_servers/moldetox/pyproject.toml
+# INPUT 8b78e7bad0bbdb512400b526e1867c6bbd1c43f5 resources_servers/moldetox/uv.lock
+# INPUT a5121bcba4194412302c9cc9585c5f7941b8fd5b resources_servers/officeenv/pyproject.toml
+# INPUT 3ffba3e1e14afc630846243ad3efe2118dda88cc resources_servers/officeenv/uv.lock
+# INPUT 780f4a0c44207c90973983225a89b8ca425818fa resources_servers/partner_if/pyproject.toml
+# INPUT 86212c688f2ae2df04adebc046f6512996bbf18d resources_servers/partner_if/uv.lock
+# INPUT c15215645f1d62775ac2dbd3339bc9d135ad1e8a resources_servers/ragtruth/pyproject.toml
+# INPUT c4fc48f47abc952d6879deaa819baaf76c7f4979 resources_servers/ragtruth/uv.lock
+# INPUT d2207964cf5621e9de7916106d016ce52e94a1b0 resources_servers/scicode/pyproject.toml
+# INPUT 5a29a3babb07bbc70316542b840795bea6019c76 resources_servers/scicode/uv.lock
+# INPUT a97438bda7e47b3c8d7fbafe67d702c4f793938d resources_servers/spider2_lite/pyproject.toml
+# INPUT 06797d2fa5f57e343eae33a6333474e5ec91ee04 resources_servers/spider2_lite/uv.lock
+# INPUT 79b99e4f1fd34228cec13c51e5f050b33da09299 resources_servers/swe_pivot/pyproject.toml
+# INPUT ccd7e7d49d4257769a3a5f8f33cbd3bf94c75bb6 resources_servers/swe_pivot/uv.lock
+# INPUT d7cc6b07da5b8092c140abc70c2d55c6224e4180 resources_servers/swerl_gen/pyproject.toml
+# INPUT b0f6b4747cb0e9d1c4b1880819715913bbf79741 resources_servers/swerl_gen/uv.lock
+# INPUT c431f8b3ee78b73eff83adb6a802aa5856074899 resources_servers/text_to_sql/pyproject.toml
+# INPUT 30f181d333e96e01d9dee462ee3bd1bf5bf2d7b3 resources_servers/text_to_sql/uv.lock
+# INPUT 4730f4af3be5e6501d55b69a86544b389beec438 resources_servers/wmt_translation/pyproject.toml
+# INPUT 0b2060c4025db72dc92998d90f513e769c030887 resources_servers/wmt_translation/uv.lock
+# INPUT 9e4937246854c5e50931a341831f54378bc16926 responses_api_agents/anyswe_agent/pyproject.toml
+# INPUT fd89f811aef7832d25f0f930c23e4925df46aa8f responses_api_agents/anyswe_agent/uv.lock
+# INPUT dc57b1fc3e228cdad4078ae1f7bf3fcbdf544106 responses_api_agents/conversational_tool_use_policy_tool_generation/pyproject.toml
+# INPUT 77b40f43ddcbcbeb64a70ba4fac968268fc8c7ad responses_api_agents/conversational_tool_use_policy_tool_generation/uv.lock
+# INPUT c890a7c00640f91cca60f15854dab2384f1ce951 responses_api_agents/harbor_agent/pyproject.toml
+# INPUT aab8d636062e4b486179946224581cc0422353cb responses_api_agents/harbor_agent/uv.lock
+# INPUT 55064811a7a0416abf87f05e42e5f8d8ed0a335c responses_api_agents/image_tools_agent/pyproject.toml
+# INPUT 272c836e7956d1eda7425a9ee6a8d6e8d32daef2 responses_api_agents/image_tools_agent/uv.lock
+# INPUT c2291fb0dc609f0763b5f6106ed067ba3f7591a6 responses_api_agents/nemo_fabric_agent/pyproject.toml
+# INPUT aca4dd95337f51323871916ae692299059cba367 responses_api_agents/nemo_fabric_agent/uv.lock
+# INPUT 3a9e4a42c7fd6bdd41380238f52fae2a1f686f9f responses_api_agents/pi_agent/pyproject.toml
+# INPUT 278ae06314ee2065010ae109739b55075c597626 responses_api_agents/pi_agent/uv.lock
+# INPUT 3090b60256c3119be5160ce44cf8451446dfc5a8 responses_api_agents/scicode_agent/pyproject.toml
+# INPUT 607c6e61c18746955ecc4004dcfabe9b19258202 responses_api_agents/scicode_agent/uv.lock
+# INPUT b6437f58ebe22208f740c31ad637130adc0a15db responses_api_agents/terminus_2_agent/pyproject.toml
+# INPUT 26ed361e782d49fc15fc1c90d4f5caf356eab759 responses_api_agents/terminus_2_agent/uv.lock
+# INPUT 68f7e82087ba90a54d6ef680aab10b0fdf36fa95 responses_api_models/azure_openai_model/pyproject.toml
+# INPUT 424a8e690faf8d55d03bc6090221c09d0fd7016a responses_api_models/azure_openai_model/uv.lock
+# INPUT d4e4afeecdfea70baeadfda9c18a4f45ad51b029 responses_api_models/vllm_model/pyproject.toml
+# INPUT 1515d9bbeb2c8dbf49cfa791a7646fe7fa7c74f2 responses_api_models/vllm_model/uv.lock
+# INPUT 741add872394adf27e25755b0ef716c11a7ab3d2 scripts/ci/server_tests.sh
+# INPUT 1fc9d9839b03d410a3aeb7c1236a6e52b4c6a0da scripts/ci/setup_dev.sh
+# INPUT dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1 uv.lock
