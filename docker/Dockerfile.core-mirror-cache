@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:46b6d513c4d88f8b2cfd6aa30a39aa07093e5a23ed31f46d9b504520acd9f6a6
+LABEL nemo.validation.component-pyproject-blob="74e18f81ff2df0da673d4a37dfada03875c8fd6c" \
+      nemo.validation.component-lock-blob="065a0d405d76cd517a5e7ffa82fc59f589a3872d" \
+      nemo.validation.parent-pyproject-blob="c9bc9ae31bc142d1fc189502f05ba86ff5daa800" \
+      nemo.validation.parent-lock-blob="dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1" \
+      nemo.validation.consumer-blob="b2551aa32b818f7e13ac3c38a8e43515964c5836" \
+      nemo.validation.seed-version="pip==26.3"
+USER 65532:65532
+WORKDIR /opt/nemo-gym/responses_api_agents/simple_agent
+# The native mirror consumer uses the extra-index namespace, including its trailing slash.
+RUN HOME=/home/nemo-runtime UV_EXTRA_INDEX_URL=https://pypi.org/simple/ \
+        uv venv --seed --python /opt/nemo_gym_venv/bin/python /tmp/gym-mirror-seed && \
+    uv export --locked --no-hashes --format requirements-txt --output-file /tmp/gym-mirror-requirements.txt && \
+    HOME=/home/nemo-runtime UV_EXTRA_INDEX_URL=https://pypi.org/simple/ \
+        uv pip install --python /tmp/gym-mirror-seed/bin/python --no-deps -r /tmp/gym-mirror-requirements.txt && \
+    rm -rf /tmp/gym-mirror-seed && \
+    HOME=/home/nemo-runtime UV_OFFLINE=1 UV_INDEX_URL=http://localhost:9/ UV_EXTRA_INDEX_URL=https://pypi.org/simple/ \
+        uv venv --seed --python /opt/nemo_gym_venv/bin/python /tmp/gym-mirror-offline && \
+    HOME=/home/nemo-runtime UV_OFFLINE=1 UV_INDEX_URL=http://localhost:9/ UV_EXTRA_INDEX_URL=https://pypi.org/simple/ \
+        uv pip install --python /tmp/gym-mirror-offline/bin/python --no-deps -r /tmp/gym-mirror-requirements.txt && \
+    /tmp/gym-mirror-offline/bin/python -c 'import pip, nemo_gym, aiohappyeyeballs; assert pip.__version__ == "26.3"; from pathlib import Path; p=Path("/opt/nemo-gym/cache/uv/.mirror-write-probe"); p.write_text("ok"); p.unlink()' && \
+    rm -rf /tmp/gym-mirror-offline /tmp/gym-mirror-requirements.txt
+WORKDIR /opt/nemo-gym
+USER root
