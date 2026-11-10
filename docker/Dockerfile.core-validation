@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:edf0b7112ebc79f46a4fb4f6f215785affb53e2143ebed016898ae9bd50dfd6f
+LABEL nemo.validation.pyproject-blob="c9bc9ae31bc142d1fc189502f05ba86ff5daa800" \
+      nemo.validation.lock-blob="dc174cd39a21eb2bb0938be9ce1f5036b2ee16f1" \
+      nemo.validation.launcher-blob="8d19aa17c43ea1adfd2f23f6f6463ee0c388b19b"
+USER 65532:65532
+WORKDIR /opt/nemo-gym
+RUN HOME=/home/nemo-runtime UV_PROJECT_ENVIRONMENT=/tmp/gym-core-seed \
+        uv sync --locked --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb && \
+    HOME=/home/nemo-runtime UV_PROJECT_ENVIRONMENT=/tmp/gym-core-seed \
+        uv sync --locked --offline --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb && \
+    /tmp/gym-core-seed/bin/python -c 'import mlflow, wandb, ray, pytest, xdist, pytest_cov; from pathlib import Path; p=Path("/opt/nemo-gym/cache/uv/.core-write-probe"); p.write_text("ok"); p.unlink()' && \
+    rm -rf /tmp/gym-core-seed
+USER root
