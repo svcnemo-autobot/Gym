@@ -1,50 +1,41 @@
 # syntax=docker/dockerfile:1.7
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Runtime-only repair; never include this Dockerfile in the product PR.
-FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:1e6397c11621af5158c4f997d258dcc1b4e700ce7ccbb64ab9679625f9463eca
-# native input scripts/ci/install_test_dependencies.sh git-blob 8b6279aa459c332cd2976318be4749e632d938e0
-# native input resources_servers/ether0/app.py git-blob c82ee31d51828a974ed545f87af518e823b449db
-# native input resources_servers/ether0/setup_ether0.py git-blob 90538b65263c77698769ea15519426227e413741
-# native input resources_servers/ether0/pyproject.toml git-blob 30de1cbe331799a5b5125864927286535a857bd5
-# native input resources_servers/ether0/uv.lock git-blob da9d0fc2cf98864418a859819d8b628fa1431e0c
-# native input resources_servers/ether0/tests/test_app.py git-blob 75fcc057ed36492fb866e5a4f073de86804f23c6
-# The native CI installer supplies these unpinned Ubuntu packages. Keep its
-# resolver behavior and log the actual transaction; reuse every existing cache.
-USER 0:0
-RUN set -eux; \
-    apt-get update; \
-    apt-get --simulate install --no-install-recommends --no-upgrade libx11-6 libxext6 libxrender1; \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-upgrade libx11-6 libxext6 libxrender1; \
-    dpkg-query -W libx11-6 libxext6 libxrender1; \
-    rm -rf /var/lib/apt/lists/*
+# Runtime-only core-test cache repair. Keep out of the product PR.
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:938d380960caa05c82aa1d321f664bd0a22319bf97e4372519d73572b086f319
+# native input nemo_gym/server_runtime/supervisor/_locked_env.py git-blob b2551aa32b818f7e13ac3c38a8e43515964c5836
+# native input tests/unit_tests/server_runtime/supervisor/test_locked_env.py git-blob 61abfabaf270b924bbea8354b7a1fc7a157b43b6
+# native input tests/unit_tests/agents/test_sandbox_supervisor_bootstrap.py git-blob b2ddbb28655814639273c463106b645d3947515f
+# native input responses_api_agents/simple_agent/pyproject.toml git-blob 74e18f81ff2df0da673d4a37dfada03875c8fd6c
+# native input responses_api_agents/simple_agent/uv.lock git-blob ec0331531d8569a7c1260bda7f2e43803228ca03
 USER 65532:65532
-ENV HOME=/home/nemo-runtime UV_CACHE_DIR=/opt/nemo-gym/cache/uv UV_LINK_MODE=copy
+# Host CI has no NGC shell initialization. Preserve restricted-PATH shell tests.
+ENV HOME=/home/nemo-runtime UV_CACHE_DIR=/opt/nemo-gym/cache/uv UV_LINK_MODE=copy ENV="" BASH_ENV=""
 WORKDIR /opt/nemo-gym
 RUN <<'SH'
 set -eu
 umask 0022
-printf 'Ether0 repaired native consumer probe, uid=%s\n' "$(id -u)"
+printf 'Prepare native mirror cache, uid=%s\n' "$(id -u)"
 test "$(id -u)" = 65532
-UV_PROJECT_ENVIRONMENT=/tmp/ether0-native-probe uv sync --project resources_servers/ether0 --locked --offline
-UV_OFFLINE=1 /tmp/ether0-native-probe/bin/python - <<'PY2'
+cd responses_api_agents/simple_agent
+uv export --locked --no-dev --output-file /tmp/native-mirror-requirements.txt > /tmp/native-mirror-export.log 2>&1
+# The native mirror fixture uses a local index plus this public extra index.
+# Seed the latter's metadata namespace without changing native lock versions.
+UV_OFFLINE=0 UV_INDEX_URL=http://127.0.0.1:9/ UV_EXTRA_INDEX_URL=https://pypi.org/simple/ UV_HTTP_RETRIES=1 uv venv --seed --python /opt/nemo_gym_venv/bin/python /tmp/mirror-seed
+UV_OFFLINE=0 UV_INDEX_URL=http://127.0.0.1:9/ UV_EXTRA_INDEX_URL=https://pypi.org/simple/ UV_HTTP_RETRIES=1 uv pip install --python /tmp/mirror-seed/bin/python --no-deps -r /tmp/native-mirror-requirements.txt
+# A fresh environment exercises the actual offline cache, not installed packages.
+UV_OFFLINE=1 UV_INDEX_URL=http://127.0.0.1:9/ UV_EXTRA_INDEX_URL=https://pypi.org/simple/ uv venv --seed --python /opt/nemo_gym_venv/bin/python /tmp/mirror-offline
+UV_OFFLINE=1 UV_INDEX_URL=http://127.0.0.1:9/ UV_EXTRA_INDEX_URL=https://pypi.org/simple/ uv pip install --python /tmp/mirror-offline/bin/python --no-deps -r /tmp/native-mirror-requirements.txt
+/tmp/mirror-offline/bin/python -m pip --version
+/tmp/mirror-offline/bin/python - <<'PY2'
+import os,shutil,subprocess,tempfile
 from pathlib import Path
-import os
-import tempfile
-from rdkit import Chem
-from rdkit.Chem.Draw import rdMolDraw2D
-from resources_servers.ether0.app import EVAL_FUNCTIONS
-assert EVAL_FUNCTIONS
-molecule = Chem.MolFromSmiles('CCO')
-assert molecule is not None
-renderer = rdMolDraw2D.MolDraw2DSVG(240, 180)
-renderer.DrawMolecule(molecule)
-renderer.FinishDrawing()
-assert '<svg' in renderer.GetDrawingText()
-for root in (Path.home(), Path(os.environ['UV_CACHE_DIR'])):
-    with tempfile.TemporaryFile(dir=root) as f:
-        f.write(b'rootless-ready')
-print('Ether0 native application import and real RDKit rendering passed offline.')
+import nemo_gym, aiohappyeyeballs
+with tempfile.TemporaryDirectory() as directory:
+    (Path(directory)/'touch').symlink_to(shutil.which('touch'))
+    result=subprocess.run([shutil.which('sh'),'-c',':'],env=os.environ|{'PATH':directory},text=True,capture_output=True)
+    assert result.returncode==0 and result.stderr=='',result
+print('Native mirror seed, full locked export and restricted-PATH shell ready offline.')
 PY2
-rm -rf /tmp/ether0-native-probe
+rm -rf /tmp/mirror-seed /tmp/mirror-offline /tmp/native-mirror-requirements.txt /tmp/native-mirror-export.log
 SH
