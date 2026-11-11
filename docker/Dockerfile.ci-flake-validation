@@ -1,141 +1,50 @@
 # syntax=docker/dockerfile:1.7
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Runtime-only extension. Keep this branch out of the product PR.
-FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/gym@sha256:854aefc4d24b9515f7b19189e0839fd29514b967f1e78e7b0beaa06e1523f40a
+# Runtime-only repair; never include this Dockerfile in the product PR.
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:1e6397c11621af5158c4f997d258dcc1b4e700ce7ccbb64ab9679625f9463eca
+# native input scripts/ci/install_test_dependencies.sh git-blob 8b6279aa459c332cd2976318be4749e632d938e0
+# native input resources_servers/ether0/app.py git-blob c82ee31d51828a974ed545f87af518e823b449db
+# native input resources_servers/ether0/setup_ether0.py git-blob 90538b65263c77698769ea15519426227e413741
+# native input resources_servers/ether0/pyproject.toml git-blob 30de1cbe331799a5b5125864927286535a857bd5
+# native input resources_servers/ether0/uv.lock git-blob da9d0fc2cf98864418a859819d8b628fa1431e0c
+# native input resources_servers/ether0/tests/test_app.py git-blob 75fcc057ed36492fb866e5a4f073de86804f23c6
+# The native CI installer supplies these unpinned Ubuntu packages. Keep its
+# resolver behavior and log the actual transaction; reuse every existing cache.
+USER 0:0
+RUN set -eux; \
+    apt-get update; \
+    apt-get --simulate install --no-install-recommends --no-upgrade libx11-6 libxext6 libxrender1; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-upgrade libx11-6 libxext6 libxrender1; \
+    dpkg-query -W libx11-6 libxext6 libxrender1; \
+    rm -rf /var/lib/apt/lists/*
 USER 65532:65532
 ENV HOME=/home/nemo-runtime UV_CACHE_DIR=/opt/nemo-gym/cache/uv UV_LINK_MODE=copy
 WORKDIR /opt/nemo-gym
-LABEL nemo.validation.recipe-inputs="4cbcbc8de85c69a951c83a28170464a4c7ffbcb67645395a6f063210f587ae75"
-# input environment_servers/single_agent_turn_legacy/pyproject.toml git-blob 48749820f3d46f3bfab02335e1f31a852b400787
-# input environment_servers/single_agent_turn_legacy/uv.lock git-blob 68541dbcb433d05d2391fa3ec24b38d504997ba4
-# input pyproject.toml git-blob 53539c1964631afb86109944e2049a24c3d0e24f
-# input resources_servers/agentic_mme/pyproject.toml git-blob 265470bb04d5ef7f09cebd551479527bf6df835a
-# input resources_servers/agentic_mme/uv.lock git-blob 838ae953d8368a4af62542fee374b7d2c6dee004
-# input resources_servers/aviary/pyproject.toml git-blob 6013361c4538a59dbb49d3f4e575a3d845dd587d
-# input resources_servers/aviary/uv.lock git-blob ab94bbb94a6b7f103e2cbd2551205cf9a0b8feed
-# input resources_servers/bunsenbench_chemistry_mcq/pyproject.toml git-blob 10c122f80ec4ee555e6d66e238fc08864e1f7031
-# input resources_servers/bunsenbench_chemistry_mcq/uv.lock git-blob 815e4f40a1ad882890148d1cfe1b91a85f9746cf
-# input resources_servers/circle_count/pyproject.toml git-blob f0bf3205ba287c4677e1579ed17ae7fada017ace
-# input resources_servers/circle_count/uv.lock git-blob b29e9a4dedc93e8352d70e8a824a52c9953228ba
-# input resources_servers/cvdp/pyproject.toml git-blob c4157ee935d891ae9e5c0b0cfc76a23ed7dd2805
-# input resources_servers/cvdp/uv.lock git-blob 9c30698761a5250b38dd2562359b3903e8802c5e
-# input resources_servers/ether0/pyproject.toml git-blob 30de1cbe331799a5b5125864927286535a857bd5
-# input resources_servers/ether0/uv.lock git-blob da9d0fc2cf98864418a859819d8b628fa1431e0c
-# input resources_servers/false_statement_judge/pyproject.toml git-blob 7703232c01937dd7ee3492dc147001c7ff748c82
-# input resources_servers/false_statement_judge/uv.lock git-blob ad7caf75572d2d5ac37b8b863ca93c96259343f0
-# input resources_servers/gdpval/pyproject.toml git-blob 8eb149cba99ab7f1ea0211e6d8170209c85d3237
-# input resources_servers/gdpval/uv.lock git-blob c20d0f8d0f7d6581aabda3ea4764dc29e57db4cc
-# input resources_servers/grl_tetris/pyproject.toml git-blob 60ad90556fdd2df43909722d450b6573d959908d
-# input resources_servers/grl_tetris/uv.lock git-blob ebebc5b53b60320f5d2bd0a1f4012fc253055990
-# input resources_servers/imo_proofbench_judge/pyproject.toml git-blob 8113a5f8475388bc9a6fa544cd461df452c7ac18
-# input resources_servers/imo_proofbench_judge/uv.lock git-blob 553a5944e9dfeef2050b449ac71b6c952c067196
-# input resources_servers/labbench2_vlm/pyproject.toml git-blob 5b43b0d0e8d69e31dc1e8b24de664eb054a81979
-# input resources_servers/labbench2_vlm/uv.lock git-blob 0127c496dceefe12a48f037778136de5a191202b
-# input resources_servers/math_formal_lean/pyproject.toml git-blob c2a093187bf48303b4acc9e00476c2691707fcbc
-# input resources_servers/math_formal_lean/uv.lock git-blob 6c4f3feecb5f61a88d83fb11c49230982f57bbf3
-# input resources_servers/mrcr/pyproject.toml git-blob fc6d3c4ada1c3ffc553780833c36d11c89f26dfe
-# input resources_servers/mrcr/uv.lock git-blob 01e10bfec5040a19c8b63d0e5fdec79b3a4704c4
-# input resources_servers/officeqa/pyproject.toml git-blob 429c710d55ffb7acbc0b60781f0dd4d4fc1de9cb
-# input resources_servers/officeqa/uv.lock git-blob 71b1e3665dc376795045e832b4bc11c587493cd3
-# input resources_servers/physics_judge/pyproject.toml git-blob 60f6f58370adbbe412a5406ef4997a345766ac6e
-# input resources_servers/physics_judge/uv.lock git-blob f4ad37180e9150a09d41bc07bd39735ce73afbdd
-# input resources_servers/reasoning_gym/pyproject.toml git-blob 710487e9ba537b8d961791fdb7145a3aa87d7c14
-# input resources_servers/reasoning_gym/uv.lock git-blob 8fd1c08c5497d7f31e557e41821e6a8424cb8e15
-# input resources_servers/scicodepile/pyproject.toml git-blob 4a57dd8e19ddcba42df5d44f159d7798b43d3db1
-# input resources_servers/scicodepile/uv.lock git-blob fef07e313b73a787fe93c2704946d536da0550bb
-# input resources_servers/string_match/pyproject.toml git-blob 06071a78607744cd134a05d1454e598189f8d0ef
-# input resources_servers/string_match/uv.lock git-blob 93d380d509725cce6a5f82853cece447f31044e3
-# input resources_servers/swe_rebench/pyproject.toml git-blob 34265e7f11492d0df915a674ee0d5330aa692244
-# input resources_servers/swe_rebench/uv.lock git-blob 2f46b131d622bb8e307deb4ed767bd18cc9c6019
-# input resources_servers/swerl_llm_judge/pyproject.toml git-blob bc33cff78f22008ac354fc944fee6441c597c8c7
-# input resources_servers/swerl_llm_judge/uv.lock git-blob 96236b4e76b31b8c7d5e6253c2a39ace49d98333
-# input resources_servers/toolsandbox/pyproject.toml git-blob df5164ef7c1536bd42103bb6fbe607b0aa4fa9ea
-# input resources_servers/toolsandbox/uv.lock git-blob a0cf1e3b50b9f6931e007502b7740458e89e5f77
-# input resources_servers/wmt_translation/pyproject.toml git-blob 4730f4af3be5e6501d55b69a86544b389beec438
-# input resources_servers/wmt_translation/uv.lock git-blob fcdfbb560356848f8a641c4bcb9d87165ee5c38a
-# input responses_api_agents/anyswe_agent/pyproject.toml git-blob 9e4937246854c5e50931a341831f54378bc16926
-# input responses_api_agents/anyswe_agent/uv.lock git-blob a06b98b67274133e66ab9d1783448bbaebe9598a
-# input responses_api_agents/conversational_tool_use_policy_tool_generation/pyproject.toml git-blob dc57b1fc3e228cdad4078ae1f7bf3fcbdf544106
-# input responses_api_agents/conversational_tool_use_policy_tool_generation/uv.lock git-blob 7ea151562ebec68185208f6a6e2dccbd62d0c9ce
-# input responses_api_agents/gymnasium_agent/pyproject.toml git-blob d71af8bdb8b1ca9e1dfe2889519ec62a771e0462
-# input responses_api_agents/gymnasium_agent/uv.lock git-blob 21abb7c18af9dd3bf485825c99729eb216dfba19
-# input responses_api_agents/hermes_sandboxed_agent/pyproject.toml git-blob f3390825a96bd9211cbf769c8d5d5dd949079a5a
-# input responses_api_agents/hermes_sandboxed_agent/uv.lock git-blob d5a7051c012e0ec6045319d645ecb8a53948b357
-# input responses_api_agents/miniswe_sandboxed_agent/pyproject.toml git-blob 447dab62a843b60f973267a15057e0fab907cb36
-# input responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt git-blob 31efc0af7ffabce2beaf7aeec81ca8102e27a884
-# input responses_api_agents/miniswe_sandboxed_agent/uv.lock git-blob 7898adbf02bc8074f9675965b3ef932d6dc4b041
-# input responses_api_agents/partner_if_dispatcher/pyproject.toml git-blob 7ed11ff4a0da549513e29daa713fa3ec4958edda
-# input responses_api_agents/partner_if_dispatcher/uv.lock git-blob 357e936198403c22019f866faa622b9718c55111
-# input responses_api_agents/rna_design_agent/pyproject.toml git-blob 19153720e4e4708980837e906fe6b558cbc92261
-# input responses_api_agents/rna_design_agent/uv.lock git-blob 69f684c403b7b63e5b37ebb2d8bc3e6a22cb5bbe
-# input responses_api_agents/tau2/pyproject.toml git-blob 1ddd6618c79014d9ded0072f5cbffed9e7f79f84
-# input responses_api_agents/tau2/uv.lock git-blob 6902a174fea94e82afc852d423ea6b4d082b093a
-# input responses_api_models/agentic_if_text/pyproject.toml git-blob 88f8d2bfb6b26e7b624774bfd83543345c387432
-# input responses_api_models/agentic_if_text/uv.lock git-blob baca52bdda8cb2ece1a3f2721eee078ea14f0c34
-# input responses_api_models/switchyard_model/pyproject.toml git-blob 679fee107eeccc09ad6bfb8962b9259197a98d35
-# input responses_api_models/switchyard_model/uv.lock git-blob 7c63af40a0ea281eb5eff59426dd4cf72b032602
-# input uv.lock git-blob 037e49eb53ba311ceea40ec0a9979a61655a4383
-# producer nemo_gym/cli/env.py git-blob e3dd3ab48a0510b8c8971f1d3a93cf134c1a0640
-# producer nemo_gym/server_runtime/supervisor/server_venv.py git-blob 7773f2554704b71e0e1980e871e708e7b4d5971f
-# producer nemo_gym/server_runtime/supervisor/_locked_env.py git-blob b2551aa32b818f7e13ac3c38a8e43515964c5836
-# producer responses_api_agents/rna_design_agent/prepare.py git-blob 071458b1e00eaecee04d5c9203d247f1d8dd5906
-# producer responses_api_agents/rna_design_agent/setup_eternafold.py git-blob 9e2ed2fe934c0c418a1cf9a3570c63f7e52f1810
-# producer resources_servers/ether0/setup_ether0.py git-blob 90538b65263c77698769ea15519426227e413741
-# producer resources_servers/wmt_translation/app.py git-blob e5465d81f0ab8ff11de8c9a5d0f3cbc88b8f8ad4
-# producer resources_servers/toolsandbox/app.py git-blob 2991175a998c07277fb8b0a7a2cdf82d7af40184
 RUN <<'SH'
 set -eu
 umask 0022
-unset UV_OFFLINE
-printf 'Preparing root CI extras\n'
-UV_PROJECT_ENVIRONMENT=/tmp/gym-root-seed uv sync --locked --extra dev --extra ray --extra telemetry --extra mlflow --extra wandb
-printf 'Preparing selected server shard\n'
-/opt/nemo_gym_venv/bin/ng_test_all +setup_only=true +num_shards=8 +shard_index=4 +delete_venvs_after_each_test=true +uv_venv_dir=/tmp/gym-server-seed +uv_cache_dir=/opt/nemo-gym/cache/uv
-printf 'Preparing isolated mini-SWE runtime\n'
-uv --no-config venv /tmp/gym-native-seed
-uv --no-config pip install --python /tmp/gym-native-seed/bin/python -r responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
-uv --no-config venv /tmp/gym-native-offline
-UV_OFFLINE=1 uv --no-config pip install --python /tmp/gym-native-offline/bin/python -r responses_api_agents/miniswe_sandboxed_agent/runtime/requirements.txt
-printf 'Preparing source and folding fixtures\n'
-git clone https://github.com/Future-House/ether0.git /tmp/ether0-source
-git -C /tmp/ether0-source checkout --detach b77e0d8eb06f62c8528da72bff22d4c7fee11371
-mkdir -p resources_servers/ether0/.ether0
-cp -a /tmp/ether0-source/src resources_servers/ether0/.ether0/src
-git clone https://github.com/eternagame/EternaFold.git /tmp/eternafold-source
-git -C /tmp/eternafold-source checkout --detach 87b9aac55cee14fd562049d08f7b92d3131f10ce
-mkdir -p /opt/nemo-gym/cache/eternafold
-cp -a /tmp/eternafold-source /opt/nemo-gym/cache/eternafold/EternaFold
-UV_PROJECT_ENVIRONMENT=/tmp/gym-rna-seed uv sync --project responses_api_agents/rna_design_agent --locked --offline
-PYTHONPATH=/opt/nemo-gym/responses_api_agents/rna_design_agent /tmp/gym-rna-seed/bin/python - <<'PY2'
-from setup_eternafold import ensure_eternafold
-from prepare import ensure_suites
-ensure_eternafold('/opt/nemo-gym/cache/eternafold')
-ensure_suites()
+printf 'Ether0 repaired native consumer probe, uid=%s\n' "$(id -u)"
+test "$(id -u)" = 65532
+UV_PROJECT_ENVIRONMENT=/tmp/ether0-native-probe uv sync --project resources_servers/ether0 --locked --offline
+UV_OFFLINE=1 /tmp/ether0-native-probe/bin/python - <<'PY2'
+from pathlib import Path
+import os
+import tempfile
+from rdkit import Chem
+from rdkit.Chem.Draw import rdMolDraw2D
+from resources_servers.ether0.app import EVAL_FUNCTIONS
+assert EVAL_FUNCTIONS
+molecule = Chem.MolFromSmiles('CCO')
+assert molecule is not None
+renderer = rdMolDraw2D.MolDraw2DSVG(240, 180)
+renderer.DrawMolecule(molecule)
+renderer.FinishDrawing()
+assert '<svg' in renderer.GetDrawingText()
+for root in (Path.home(), Path(os.environ['UV_CACHE_DIR'])):
+    with tempfile.TemporaryFile(dir=root) as f:
+        f.write(b'rootless-ready')
+print('Ether0 native application import and real RDKit rendering passed offline.')
 PY2
-printf 'Preparing and probing FLORES200\n'
-UV_PROJECT_ENVIRONMENT=/tmp/gym-wmt-seed uv sync --project resources_servers/wmt_translation --locked --offline
-/tmp/gym-wmt-seed/bin/python - <<'PY2'
-import math
-from sacrebleu.metrics import BLEU
-score=BLEU(tokenize='flores200',effective_order=True).sentence_score('This is a test.', ['This is a test.']).score
-assert math.isclose(score,100),score
-PY2
-printf 'Probing native constructor and permissions offline\n'
-UV_PROJECT_ENVIRONMENT=/tmp/gym-toolsandbox-seed uv sync --project resources_servers/toolsandbox --locked --offline
-(cd resources_servers/toolsandbox && UV_OFFLINE=1 /tmp/gym-toolsandbox-seed/bin/python - <<'PY2'
-from app import named_scenarios,ToolBackend
-assert named_scenarios(preferred_tool_backend=ToolBackend.DEFAULT)
-PY2
-)
-UV_OFFLINE=1 /tmp/gym-native-offline/bin/python - <<'PY2'
-from minisweagent.environments.local import LocalEnvironment
-assert LocalEnvironment().execute({'command':'printf ready'})['output']=='ready'
-PY2
-printf '>probe\nGGGAAACCC\n' > /tmp/fold-probe.fa
-/opt/nemo-gym/cache/eternafold/EternaFold/src/contrafold predict /tmp/fold-probe.fa --params /opt/nemo-gym/cache/eternafold/EternaFold/parameters/EternaFoldParams.v1
-# Keep native runtime inputs, not temporary environments or clone metadata.
-rm -rf /tmp/gym-root-seed /tmp/gym-native-seed /tmp/gym-native-offline /tmp/gym-rna-seed /tmp/gym-wmt-seed /tmp/gym-toolsandbox-seed /tmp/gym-server-seed /tmp/ether0-source /tmp/eternafold-source /opt/nemo-gym/cache/eternafold/EternaFold/.git
-printf 'Dependency extension complete\n'
+rm -rf /tmp/ether0-native-probe
 SH
-ENV ARNIEFILE=/opt/nemo-gym/cache/eternafold/arniefile.txt
