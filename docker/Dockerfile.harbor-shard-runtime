@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM 766267172432.dkr.ecr.us-east-1.amazonaws.com/nemo-autobot/agent-sandbox@sha256:03743e31d319383a47d723fdfee3a7548da51d110a41d95c2c30e6fcf93fad2e
+# Runtime-only extension; the product PR changes no container or dependency inputs.
+# Inputs are the exact helper/lock Git blobs at source 65dd99e969c906d6264c6632516da95a9721e318:
+# chemcotbench/setup_upstream.py 8c8992a42d1a0f72aad5bc04b670e963505ce65c
+# chemcotbench/setup_molopt.py e884bd1becf39353b6dea1a450de1741b709471a
+# chemcotbench/molopt/pyproject.toml 8ccfbd6fa181eff62ecb3d611192db2af713027e
+# chemcotbench/molopt/uv.lock 83a0aa7408acfb053886d1d527a1d06ae9d508ec
+# interactive_browser/pyproject.toml f716c5084ab6e72c6c18f82686b7a398c6bd0ae2
+# interactive_browser/uv.lock 53eefefa8525cbf33f67b80a1754326dc80add5b
+# interactive_browser/browser/_chromium.py 33182244750d63342467f03469400dafe1857e10
+USER root
+# Use the unchanged native CI system-library list as root during image preparation.
+RUN apt-get update && \
+    bash -c 'set -euo pipefail; source <(sed -n "/^packages=(/,/^)/p" scripts/ci/install_test_dependencies.sh); DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"' && \
+    rm -rf /var/lib/apt/lists/*
+RUN install -d -o 65532 -g 65532 /opt/gym-test-assets /opt/uv/python && \
+    chown 65532:65532 /opt/uv/python
+ENV HOME=/home/nemo-runtime \
+    HF_HOME=/opt/gym-test-assets/huggingface \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/gym-test-assets/ms-playwright \
+    CHEMCOTBENCH_TEST_REPO=/opt/gym-test-assets/chemcotbench/repo \
+    CHEMCOTBENCH_TEST_DATA=/opt/gym-test-assets/chemcotbench/data \
+    CHEMCOTBENCH_TEST_ORACLE_DIR=/opt/gym-test-assets/chemcotbench/molopt \
+    CHEMCOTBENCH_TEST_MOLOPT_PYTHON=/opt/gym-test-assets/chemcotbench/molopt/venv/bin/python
+USER 65532:65532
+WORKDIR /opt/nemo-gym
+RUN <<'SHELL' bash -euo pipefail
+probe_root=$(mktemp -d /tmp/gym-asset-envs.XXXXXX)
+export GYM_ASSET_PROBE_ROOT="$probe_root"
+trap 'rm -rf "$GYM_ASSET_PROBE_ROOT"' EXIT
+python -u - <<'PY'
+import os,subprocess,sys
+from pathlib import Path
+from nemo_gym.cli.env import _setup_single,TestConfig
+from nemo_gym.config.global_config import get_global_config_dict
+c=get_global_config_dict();c.uv_venv_dir=os.environ['GYM_ASSET_PROBE_ROOT'];c.uv_cache_dir=os.environ['UV_CACHE_DIR']
+for component in ('resources_servers/chemcotbench','resources_servers/interactive_browser'):
+    print('prepare',component,flush=True)
+    rc=_setup_single(TestConfig(entrypoint=component),c).wait()
+    if rc: raise SystemExit(rc)
+chem=f"{c.uv_venv_dir}/resources_servers/chemcotbench/.venv/bin/python"
+browser=f"{c.uv_venv_dir}/resources_servers/interactive_browser/.venv/bin/python"
+chem_code='''import os,shutil
+from pathlib import Path
+from setup_upstream import ensure_repository,ensure_data,DATA_REVISION
+from setup_molopt import ensure_molopt_runtime
+from huggingface_hub import snapshot_download
+p=ensure_repository(None)
+target=Path(os.environ['CHEMCOTBENCH_TEST_REPO']);target.parent.mkdir(parents=True,exist_ok=True)
+shutil.copytree(p,target,symlinks=True)
+ensure_repository(str(target))
+snapshot_download('fresnellll/ChemCoTBench-V2',repo_type='dataset',revision=DATA_REVISION,local_dir=os.environ['CHEMCOTBENCH_TEST_DATA'])
+ensure_data(os.environ['CHEMCOTBENCH_TEST_DATA'])
+print('Preparing native MolOpt runtime',flush=True)
+ensure_molopt_runtime(cache_dir=os.environ['CHEMCOTBENCH_TEST_ORACLE_DIR'])
+print('ChemCoT assets ready',flush=True)
+'''
+subprocess.run([chem,'-u','-c',chem_code],cwd='resources_servers/chemcotbench',check=True,timeout=1800)
+subprocess.run([browser,'-m','playwright','install','chromium'],check=True,timeout=600)
+# Probe the exact cache-consuming helpers offline in fresh interpreters as the test UID.
+offline=os.environ|{'HF_HUB_OFFLINE':'1','UV_OFFLINE':'1'}
+subprocess.run([chem,'-c','import os; from setup_upstream import ensure_repository,ensure_data; from setup_molopt import ensure_molopt_runtime; ensure_repository(os.environ["CHEMCOTBENCH_TEST_REPO"]); ensure_data(os.environ["CHEMCOTBENCH_TEST_DATA"]); ensure_molopt_runtime(os.environ["CHEMCOTBENCH_TEST_MOLOPT_PYTHON"],os.environ["CHEMCOTBENCH_TEST_ORACLE_DIR"]); print("ChemCoT offline probe passed")'],cwd='resources_servers/chemcotbench',env=offline,check=True,timeout=600)
+subprocess.run([browser,'-c','from browser._chromium import ensure_chromium; ensure_chromium(); from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True); print("Chromium offline probe",b.version); b.close(); p.stop()'],cwd='resources_servers/interactive_browser',env=offline,check=True,timeout=90)
+PY
+SHELL
+USER root
