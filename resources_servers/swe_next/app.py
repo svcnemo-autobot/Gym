@@ -71,6 +71,7 @@ from resources_servers.swe_next.verification import (
     run_verification,
     verification_files,
 )
+from resources_servers.swebench.agent_network import AgentNetworkConfig
 from resources_servers.swebench.anti_cheat import apply_anti_cheat_setup
 from resources_servers.swebench.patch_capture import (
     CaptureCommandError,
@@ -103,7 +104,7 @@ async def hide_grading_artifacts(sandbox: AsyncSandbox, workdir: str) -> None:
         raise RuntimeError(f"Failed to hide grading artifacts in {workdir}")
 
 
-class SWENextResourcesServerConfig(BaseResourcesServerConfig):
+class SWENextResourcesServerConfig(BaseResourcesServerConfig, AgentNetworkConfig):
     is_verifying_golden_patch: bool = False
     # "worktree" (diff of the working tree) or "committed" (committed work only); see swebench/patch_capture.py.
     patch_capture_mode: PatchCaptureMode = "worktree"
@@ -179,6 +180,7 @@ class SWENextResourcesServer(SandboxSessionResourcesServer):
 
     def model_post_init(self, context: Any, /) -> None:
         super().model_post_init(context)
+        self.config.check_agent_network_provider(get_global_config_dict())
         self._session_id_to_sandbox: dict[str, AsyncSandbox] = {}
         self._session_id_to_pristine_untracked: dict[str, frozenset[str]] = {}
         self._session_id_to_base_commit: dict[str, str] = {}
@@ -199,6 +201,7 @@ class SWENextResourcesServer(SandboxSessionResourcesServer):
         *,
         session_id: str | None = None,
         verifier_session_id: str | None = None,
+        for_agent: bool = False,
     ) -> AsyncSandbox:
         global_config_dict = get_global_config_dict()
         provider_config = resolve_provider_config(self.config.sandbox_provider, global_config_dict)
@@ -229,7 +232,7 @@ class SWENextResourcesServer(SandboxSessionResourcesServer):
                 "instance_id": body.instance_id[:63],
             },
             resources=sandbox_resources,
-            provider_options=self.config.sandbox_config.get("provider_options", {}),
+            provider_options=self.config.sandbox_provider_options(provider_config, for_agent=for_agent),
         )
         sandbox = AsyncSandbox(provider_config)
         if session_id is not None:
@@ -307,7 +310,7 @@ class SWENextResourcesServer(SandboxSessionResourcesServer):
 
     async def _start_task_sandbox(self, session_id: str, body: SWENextInstanceRequest) -> str:
         self._forget_task_sandbox_state(session_id)
-        sandbox = await self._create_sandbox(body, session_id=session_id)
+        sandbox = await self._create_sandbox(body, session_id=session_id, for_agent=True)
         await hide_grading_artifacts(sandbox, body.workdir)
         await self._init_git_repo(sandbox, body.workdir)
         if self.config.apply_anti_cheating:
